@@ -1,0 +1,1967 @@
+/* Layer order: Astryx reset -> components -> theme, then this app's layout, graph and motion. */
+@layer reset, astryx-base, astryx-theme, app;
+
+@import "@astryxdesign/core/reset.css";
+@import "@astryxdesign/core/astryx.css";
+@import "@astryxdesign/theme-stone/fonts.css";
+@import "@astryxdesign/theme-stone/theme.css";
+
+@layer app {
+  body {
+    background: var(--color-background-body);
+  }
+
+  /*
+   * Status tokens. Stone's dark status fills are pastel (success, error and warning read near
+   * white, and muted fills pair pale text with pale tan), so the app owns one trio per tone that
+   * holds 4.5:1 or more in both schemes: a quiet surface, its ink, a border, and a strong mark.
+   */
+  :root,
+  [data-astryx-theme] {
+    --app-warn-bg: light-dark(#f6e7c1, #3a3220);
+    --app-warn-fg: light-dark(#4a3f10, #f3e3b5);
+    --app-warn-border: light-dark(#a08c36, #9a8540);
+    --app-warn-strong: light-dark(#8a6a00, #e3bd4f);
+    --app-err-bg: light-dark(#fbe0db, #432825);
+    --app-err-fg: light-dark(#5c2f28, #f8d7d1);
+    --app-err-border: light-dark(#b0695e, #b0675c);
+    --app-err-strong: light-dark(#b23b2a, #f08070);
+    --app-ok-bg: light-dark(#dcefd8, #233220);
+    --app-ok-fg: light-dark(#2f4a2a, #d4ead0);
+    --app-ok-border: light-dark(#609757, #5f9657);
+    --app-ok-strong: light-dark(#3f7d35, #7bc96f);
+  }
+  .astryx-banner[data-status="warning"] {
+    --color-warning-muted: var(--app-warn-bg);
+    --color-on-warning-muted: var(--app-warn-fg);
+  }
+  .astryx-banner[data-status="error"] {
+    --color-error-muted: var(--app-err-bg);
+    --color-on-error-muted: var(--app-err-fg);
+  }
+
+  .status-mark {
+    display: inline-grid;
+    place-items: center;
+    flex: none;
+    line-height: 0;
+    color: var(--mark, var(--color-icon-secondary));
+  }
+  .status-mark[data-tone="success"] {
+    --mark: var(--app-ok-strong);
+  }
+  .status-mark[data-tone="warning"] {
+    --mark: var(--app-warn-strong);
+  }
+  .status-mark:is([data-tone="error"], [data-tone="refused"]) {
+    --mark: var(--app-err-strong);
+  }
+  .sr-only {
+    position: absolute;
+    inline-size: 1px;
+    block-size: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  /* ---- Actor colours: one categorical hue per agent, shared by the graph and the chain. ---- */
+  [data-node="supervisor"],
+  [data-actor="supervisor"] {
+    --actor: var(--color-data-categorical-purple);
+  }
+  [data-node="planner"],
+  [data-actor="planner"] {
+    --actor: var(--color-data-categorical-blue);
+  }
+  [data-node="pricing"],
+  [data-actor="pricing"] {
+    --actor: var(--color-data-categorical-teal);
+  }
+  [data-node="booking"],
+  [data-actor="booking"] {
+    --actor: var(--color-data-categorical-orange);
+  }
+  [data-node="approval"],
+  [data-actor="human"] {
+    --actor: var(--color-data-categorical-pink);
+  }
+  [data-node="payments"] {
+    --actor: var(--color-data-categorical-green);
+  }
+  /* The card processor reporting after the charge (webhooks, reconciliation). */
+  [data-actor="processor"] {
+    --actor: var(--color-data-categorical-brown);
+  }
+  /* The agent-platform wallet: a third institution (saved card, mandate, scoped tokens). */
+  [data-node="wallet"],
+  [data-actor="wallet"] {
+    --actor: var(--color-data-categorical-indigo);
+  }
+
+  /* ---- Header ---- */
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-2);
+    min-width: 0;
+  }
+  .brand-mark {
+    display: inline-grid;
+    place-items: center;
+    inline-size: 28px;
+    block-size: 28px;
+    border-radius: var(--radius-inner);
+    background: var(--color-background-inverted);
+    color: var(--color-background-body);
+    flex: none;
+  }
+  .brand-title {
+    font-size: var(--font-size-lg);
+    white-space: nowrap;
+  }
+  .nav-end {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-3);
+  }
+  .signals {
+    display: flex;
+    gap: var(--spacing-2);
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .signal {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-1-5);
+    padding: 3px var(--spacing-2-5, 10px) 3px var(--spacing-2);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-full);
+    background: var(--color-background-card);
+    white-space: nowrap;
+  }
+  .signal .status-mark svg {
+    inline-size: 14px;
+    block-size: 14px;
+  }
+  .signal-off {
+    display: inline-block;
+    inline-size: 8px;
+    block-size: 8px;
+    border-radius: var(--radius-full);
+    border: 1.5px solid var(--color-border-emphasized);
+    flex: none;
+  }
+
+  /* ---- Console layout: request + stage on the left, the human gate docked right, evidence below. ---- */
+  .console {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
+    /* The decision column runs the full height, so a tall approval card leaves no dead band. */
+    grid-template-areas:
+      "error error"
+      "command gate"
+      "stage gate"
+      "evidence gate";
+    grid-template-rows: auto auto auto 1fr;
+    gap: var(--spacing-4);
+    max-inline-size: 1440px;
+    margin-inline: auto;
+    padding: var(--spacing-4) var(--spacing-6) var(--spacing-8);
+  }
+  .console-error {
+    grid-area: error;
+  }
+  .console:not(:has(.console-error)) {
+    grid-template-areas:
+      "command gate"
+      "stage gate"
+      "evidence gate";
+    grid-template-rows: auto auto 1fr;
+  }
+  .area-command {
+    grid-area: command;
+  }
+  .area-stage {
+    grid-area: stage;
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-2);
+    min-inline-size: 0;
+  }
+  .area-gate {
+    grid-area: gate;
+    align-self: start;
+    position: sticky;
+    top: var(--spacing-4);
+  }
+  .area-evidence {
+    grid-area: evidence;
+    min-inline-size: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-3);
+  }
+  .area-command,
+  .chain-item > *,
+  .stage-node-icon,
+  .stage-chips,
+  .stage-slot,
+  .stage-edge,
+  .stage-boundary {
+    transition:
+      opacity var(--duration-medium) ease,
+      filter var(--duration-medium) ease;
+  }
+
+  @media (width < 1100px) {
+    .console,
+    .console:not(:has(.console-error)) {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-areas: "error" "command" "stage" "gate" "evidence";
+      grid-template-rows: none;
+    }
+    .console:not(:has(.console-error)) {
+      grid-template-areas: "command" "stage" "gate" "evidence";
+    }
+    .area-gate {
+      position: static;
+      max-inline-size: 640px;
+      inline-size: 100%;
+    }
+    /* Nothing to decide yet: no empty placeholder between the stage and the chain. */
+    .area-gate:has(.gate-idle) {
+      display: none;
+    }
+  }
+  @media (width < 600px) {
+    .console {
+      padding: var(--spacing-3) var(--spacing-4) 96px;
+      gap: var(--spacing-3);
+    }
+    /* One pill on phones: the most severe lit signal, with its value. */
+    .signal:not([data-primary]),
+    .signal-label {
+      display: none;
+    }
+    .brand [data-testid="demo-badge"] {
+      display: none;
+    }
+    .brand-title {
+      font-size: var(--font-size-md, 16px);
+    }
+    .brand .astryx-badge {
+      flex: none;
+    }
+  }
+
+  /* ---- Command bar ---- */
+  .command {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-2);
+  }
+  .command-locked {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-1-5);
+    margin: 0;
+  }
+  .request-quote {
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-style: italic;
+  }
+  /* The approver reads the whole request before paying. */
+  .gate-card .request-quote {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    white-space: normal;
+  }
+
+  /* ---- Trip planner: schematic map, short form, composed sentence ---- */
+  .planner {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-3);
+    padding: var(--spacing-3) var(--spacing-4);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-container);
+    background: var(--color-background-card);
+    min-inline-size: 0;
+  }
+  .planner-head {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-0-5);
+  }
+  .planner-title {
+    font-size: var(--font-size-md, 16px);
+  }
+  .planner-suggest {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-1-5);
+  }
+  /* Long suggestion labels wrap inside the chip rather than widening the page. */
+  .planner-suggest button {
+    max-inline-size: 100%;
+    block-size: auto;
+    min-block-size: 32px;
+    padding-block: var(--spacing-1);
+  }
+  .planner-suggest button * {
+    white-space: normal;
+    overflow-wrap: anywhere;
+    text-align: start;
+    overflow: visible;
+    text-overflow: clip;
+  }
+  .planner-body {
+    display: grid;
+    grid-template-columns: minmax(0, 340px) minmax(0, 1fr);
+    gap: var(--spacing-4);
+    align-items: start;
+  }
+  .planner-map {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-2);
+    min-inline-size: 0;
+  }
+  .planner-cities {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-0-5);
+  }
+  .planner-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-3);
+    min-inline-size: 0;
+  }
+  .planner-route {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-2);
+    min-block-size: 32px;
+  }
+  .planner-leg {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--spacing-2);
+    align-items: end;
+  }
+  .planner-time {
+    display: flex;
+    align-items: end;
+    gap: var(--spacing-1-5);
+    min-inline-size: 0;
+  }
+  .planner-time > :first-child {
+    flex: 1;
+    min-inline-size: 0;
+  }
+  .planner-send {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: var(--spacing-2);
+    padding-block-start: var(--spacing-2);
+    border-block-start: 1px solid var(--color-border);
+  }
+  .planner-sentence {
+    margin: 0;
+    flex: 1 1 260px;
+    min-inline-size: 0;
+  }
+  .planner-actions {
+    display: flex;
+    gap: var(--spacing-2);
+    margin-inline-start: auto;
+  }
+  @media (width < 700px) {
+    .planner-body,
+    .planner-leg {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  /* The map: SVG links underneath, stations as real buttons placed on top (percent positions). */
+  .network-map {
+    position: relative;
+    inline-size: 100%;
+    max-inline-size: 340px;
+    aspect-ratio: 320 / 260;
+    margin-inline: auto;
+  }
+  .network-map svg {
+    position: absolute;
+    inset: 0;
+    inline-size: 100%;
+    block-size: 100%;
+    overflow: visible;
+  }
+  .network-link path {
+    fill: none;
+    stroke: var(--color-border-emphasized);
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
+  .network-link text {
+    font-family: inherit;
+    font-size: 11px;
+    fill: var(--color-text-secondary);
+    paint-order: stroke;
+    stroke: var(--color-background-card);
+    stroke-width: 4px;
+    stroke-linejoin: round;
+  }
+  .network-link[data-selected] path {
+    stroke: var(--color-accent);
+    stroke-width: 4;
+  }
+  .network-link[data-selected] text {
+    fill: var(--color-text-primary);
+    font-weight: var(--font-weight-semibold, 600);
+  }
+  .network-station {
+    position: absolute;
+    translate: -50% -50%;
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-1);
+    padding: var(--spacing-1);
+    border: 0;
+    border-radius: var(--radius-full);
+    background: transparent;
+    color: var(--color-text-primary);
+    font: inherit;
+    cursor: pointer;
+    /* 24px minimum target around the dot (WCAG 2.5.8). */
+    min-block-size: 28px;
+  }
+  .network-station[data-side="left"] {
+    flex-direction: row-reverse;
+    translate: calc(-100% + 14px) -50%;
+  }
+  .network-station[data-side="right"] {
+    translate: -14px -50%;
+  }
+  .network-station:hover .network-dot {
+    box-shadow: 0 0 0 4px var(--color-overlay-hover);
+  }
+  .network-station:focus-visible {
+    outline: 2px solid var(--color-border-info);
+    outline-offset: 1px;
+  }
+  .network-station:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+  }
+  .network-dot {
+    flex: none;
+    inline-size: 16px;
+    block-size: 16px;
+    border-radius: var(--radius-full);
+    border: 3px solid var(--color-text-primary);
+    background: var(--color-background-card);
+  }
+  .network-station[data-role] .network-dot {
+    border-color: var(--color-accent);
+    background: var(--color-accent);
+  }
+  .network-name {
+    display: inline-flex;
+    align-items: baseline;
+    gap: var(--spacing-1);
+    padding: 0 var(--spacing-1);
+    border-radius: var(--radius-inner);
+    background: var(--color-background-card);
+    font-size: var(--font-size-sm, 13px);
+    font-weight: var(--font-weight-semibold, 600);
+    white-space: nowrap;
+  }
+  .network-role {
+    font-size: 11px;
+    font-weight: normal;
+    color: var(--color-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  /* ---- Stage: the graph is the canvas ---- */
+  .stage-caption {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-2);
+    min-block-size: 24px;
+    flex-wrap: wrap;
+  }
+  .stage-live {
+    margin-inline-start: auto;
+    animation: fade-in var(--duration-fast) ease both;
+  }
+  .stage {
+    position: relative;
+    container-type: inline-size;
+    block-size: clamp(240px, 20vw, 290px);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-container);
+    background-color: var(--color-background-surface);
+    background-image: radial-gradient(var(--color-border) 1px, transparent 1px);
+    background-size: 20px 20px;
+    overflow: hidden;
+  }
+  .stage-inspect {
+    animation: fade-in var(--duration-fast) ease both;
+  }
+  .stage-edges {
+    position: absolute;
+    inset: 0;
+    inline-size: 100%;
+    block-size: 100%;
+    overflow: visible;
+  }
+  .stage-edge {
+    fill: none;
+    stroke: var(--color-border-emphasized);
+    stroke-width: 1.5;
+  }
+  .stage-edge[data-kind="route"] {
+    stroke-dasharray: 2 5;
+    opacity: 0.7;
+  }
+  .stage-edge[data-state="active"] {
+    stroke: var(--color-info);
+    stroke-width: 2.5;
+    stroke-dasharray: 7 6;
+    opacity: 1;
+    animation: edge-flow 0.7s linear infinite;
+  }
+  .stage-edge[data-state="done"] {
+    stroke: var(--color-text-secondary);
+    stroke-width: 2;
+  }
+  .stage-edge[data-kind="route"][data-state="done"] {
+    stroke-width: 1.5;
+    opacity: 0.55;
+  }
+
+  .stage-boundary {
+    position: absolute;
+    inset-inline: 79.5% 1.5%;
+    inset-block: 30% 10%;
+    border: 1.5px dashed light-dark(var(--color-border-emphasized), color-mix(in srgb, var(--color-data-categorical-green) 55%, transparent));
+    border-radius: var(--radius-container);
+    background: light-dark(
+      color-mix(in srgb, var(--color-data-categorical-green) 6%, transparent),
+      color-mix(in srgb, var(--color-data-categorical-green) 12%, transparent)
+    );
+    padding: var(--spacing-1-5) var(--spacing-2);
+    display: flex;
+    flex-direction: column;
+  }
+  .stage-boundary-note {
+    font-size: 11px;
+    line-height: 1.2;
+  }
+  /*
+   * With the wallet drawn the stage grows: the wallet's own dashed boundary sits top right,
+   * its words on the left of its medallion, and the payments boundary keeps its words at the
+   * bottom, so the token's path (booking -> wallet -> payments) never crosses text.
+   */
+  .stage[data-wallet="true"] {
+    block-size: clamp(300px, 25vw, 350px);
+  }
+  .stage[data-wallet="true"] .stage-boundary[data-boundary="payments"] {
+    inset-block: 31% 3%;
+    justify-content: flex-end;
+  }
+  .stage-boundary[data-boundary="wallet"] {
+    inset-inline: 64% 1.5%;
+    inset-block: 2% 73%;
+    padding-inline-end: 22%;
+    border-color: light-dark(
+      var(--color-border-emphasized),
+      color-mix(in srgb, var(--color-data-categorical-indigo) 60%, transparent)
+    );
+    background: light-dark(
+      color-mix(in srgb, var(--color-data-categorical-indigo) 6%, transparent),
+      color-mix(in srgb, var(--color-data-categorical-indigo) 14%, transparent)
+    );
+  }
+  .stage[data-model="wallet"] .stage-edge:is([data-edge="booking-wallet"], [data-edge="wallet-payments"])[data-state="done"],
+  .stage[data-model="checkout"] .stage-edge[data-edge="booking-payments"][data-state="done"] {
+    stroke: var(--color-text-primary);
+    stroke-width: 2.5;
+  }
+
+  .stage-slot {
+    position: absolute;
+    left: var(--x);
+    top: var(--y);
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    z-index: 1;
+  }
+  /*
+   * The supervisor's fan-out leaves from its medallion, so its slot is anchored on the icon's
+   * centre (pill border + left padding + icon radius), not on the pill's: the label sits to the
+   * right, clear of every edge.
+   */
+  .stage-slot[data-node="supervisor"] {
+    --anchor: calc(1px + var(--spacing-1-5) + 16px);
+    transform: translate(calc(-1 * var(--anchor)), -50%);
+  }
+  .stage-node[data-node="supervisor"]:is([data-state="running"], [data-state="paused"]) {
+    transform: none;
+    border-color: var(--color-border);
+  }
+  .stage-node[data-node="supervisor"]:is([data-state="running"], [data-state="paused"]) .stage-node-icon {
+    animation: none;
+  }
+  .label-short {
+    display: none;
+  }
+  .stage-node {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-2);
+    padding: var(--spacing-1-5) var(--spacing-3) var(--spacing-1-5) var(--spacing-1-5);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-full);
+    background: var(--color-background-card);
+    color: var(--color-text-primary);
+    font: inherit;
+    text-align: start;
+    cursor: pointer;
+    white-space: nowrap;
+    transition:
+      transform var(--duration-medium) ease,
+      border-color var(--duration-fast) ease,
+      opacity var(--duration-medium) ease;
+  }
+  .stage-node:hover {
+    background-image: linear-gradient(var(--color-overlay-hover), var(--color-overlay-hover));
+  }
+  .stage-node:focus-visible {
+    outline: 2px solid var(--color-border-info);
+    outline-offset: 2px;
+  }
+  .stage-node[aria-pressed="true"] {
+    box-shadow: var(--shadow-inset-selected);
+    border-color: var(--color-border-info);
+  }
+  .stage-node-icon {
+    position: relative;
+    display: inline-grid;
+    place-items: center;
+    inline-size: 32px;
+    block-size: 32px;
+    border-radius: var(--radius-full);
+    /* Opaque, so an edge passing behind a medallion never shows through its icon. */
+    background:
+      linear-gradient(color-mix(in srgb, var(--actor) 22%, transparent), color-mix(in srgb, var(--actor) 22%, transparent)),
+      var(--color-background-card);
+    color: var(--actor);
+    flex: none;
+  }
+  .stage-node-state .status-mark svg {
+    inline-size: 13px;
+    block-size: 13px;
+  }
+  .stage-node-text {
+    display: inline-flex;
+    flex-direction: column;
+    line-height: 1.2;
+  }
+  .stage-node-state {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-1);
+  }
+  .stage-node-check {
+    position: absolute;
+    inset-block-end: -3px;
+    inset-inline-end: -3px;
+    display: inline-grid;
+    place-items: center;
+    inline-size: 14px;
+    block-size: 14px;
+    border-radius: var(--radius-full);
+    background: var(--app-ok-strong);
+    color: var(--color-background-card);
+    border: 1.5px solid var(--color-background-card);
+  }
+  .stage-node-check[data-tone="warning"] {
+    background: var(--app-warn-strong);
+  }
+  .stage-node-check[data-tone="error"] {
+    background: var(--app-err-strong);
+  }
+  .stage-node-count {
+    display: none;
+  }
+  /* Idle reads quieter through the medallion only, so its words keep full contrast. */
+  .stage-node[data-state="idle"] .stage-node-icon {
+    background: var(--color-background-muted);
+    color: var(--color-icon-secondary);
+  }
+  .stage-node[data-state="running"] {
+    border-color: var(--actor);
+    transform: scale(1.04);
+  }
+  .stage-node[data-state="running"] .stage-node-icon {
+    animation: ring-pulse 1.1s ease-out infinite;
+  }
+  .stage-node[data-state="paused"] {
+    border-color: var(--color-accent);
+    transform: scale(1.1);
+  }
+  .stage-node[data-state="paused"] .stage-node-icon {
+    animation: ring-pulse-strong 1.4s ease-out infinite;
+  }
+  .stage-node[data-state="flagged"] {
+    border-color: var(--color-border-warning);
+  }
+  .stage-node[data-state="flagged"] {
+    border-color: var(--app-warn-border);
+  }
+  .stage-node[data-state="flagged"] .stage-node-icon {
+    background: var(--app-warn-bg);
+    color: var(--app-warn-fg);
+  }
+  .stage-node:is([data-state="blocked"], [data-state="failed"]) {
+    border-color: var(--app-err-border);
+  }
+  .stage-node:is([data-state="blocked"], [data-state="failed"]) .stage-node-icon {
+    background: var(--app-err-bg);
+    color: var(--app-err-fg);
+  }
+
+  .stage-chips {
+    position: absolute;
+    top: calc(100% + var(--spacing-1-5));
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--spacing-1);
+    inline-size: max-content;
+    max-inline-size: 190px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  /* Neutral chips are metadata: outline only. Fills are kept for flagged and refused calls. */
+  .stage-chip {
+    padding: 0 var(--spacing-1);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-inner);
+    background: var(--color-background-surface);
+    color: var(--color-text-secondary);
+    animation: chip-in var(--duration-medium) ease both;
+  }
+  .stage-chip-text {
+    font-family: var(--font-family-code);
+    font-size: 11px;
+    line-height: 1.4;
+    color: inherit;
+  }
+  .stage-chip[data-flagged="true"] {
+    border-color: var(--app-warn-border);
+    background: var(--app-warn-bg);
+    color: var(--app-warn-fg);
+  }
+  .stage-chip[data-denied="true"] {
+    border-color: var(--app-err-border);
+    background: var(--app-err-bg);
+    color: var(--app-err-fg);
+  }
+  .stage-notes {
+    display: none;
+    flex-wrap: wrap;
+    gap: var(--spacing-1-5);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  @media (width < 700px) {
+    .stage-notes {
+      display: flex;
+    }
+  }
+
+  /* Phones and narrow panes: nodes collapse to medallions, tool chips become a count. */
+  @container (width < 640px) {
+    .stage-node {
+      flex-direction: column;
+      gap: var(--spacing-1);
+      padding: 0;
+      border: none;
+      background: none;
+    }
+    .stage-node:hover {
+      background-image: none;
+    }
+    .stage-node[aria-pressed="true"] {
+      box-shadow: none;
+    }
+    .stage-node[aria-pressed="true"] .stage-node-icon {
+      box-shadow: var(--shadow-inset-selected);
+    }
+    .stage-node-icon {
+      inline-size: 40px;
+      block-size: 40px;
+      border: 1px solid var(--actor);
+    }
+    .stage-node[data-state="idle"] .stage-node-icon {
+      border-color: var(--color-border);
+    }
+    .stage-chips {
+      display: none;
+    }
+    /* State stays in words under each medallion; the shaped badge carries it too. */
+    .stage-node-text {
+      align-items: center;
+      text-align: center;
+    }
+    .stage-node-state > :not(.stage-node-label) {
+      display: none;
+    }
+    .stage-node-label {
+      font-size: 11px;
+      line-height: 1.15;
+      white-space: nowrap;
+    }
+    .label-long {
+      display: none;
+    }
+    .label-short {
+      display: inline;
+    }
+    .stage-slot[data-node="supervisor"] {
+      --anchor: 20px;
+    }
+    /* The supervisor's label sits beside it, clear of the fan-out below. */
+    .stage-node[data-node="supervisor"] {
+      flex-direction: row;
+      align-items: flex-start;
+      gap: var(--spacing-2);
+    }
+    .stage-node[data-node="supervisor"] .stage-node-text {
+      align-items: flex-start;
+      text-align: start;
+      /* A plate under the label, so the fan-out passes beneath it, never through it. */
+      padding: 1px var(--spacing-1);
+      border-radius: var(--radius-inner);
+      background: var(--color-background-surface);
+    }
+    .stage-node-count {
+      position: absolute;
+      inset-block-start: -4px;
+      inset-inline-end: -6px;
+      display: inline-grid;
+      place-items: center;
+      min-inline-size: 16px;
+      block-size: 16px;
+      padding: 0 3px;
+      border-radius: var(--radius-full);
+      background: var(--color-background-inverted);
+      color: var(--color-background-body);
+      font-size: 10px;
+      font-weight: var(--font-weight-semibold);
+    }
+    .stage-node[data-state="flagged"] .stage-node-count {
+      background: var(--color-warning);
+      color: var(--color-on-warning);
+    }
+    .stage-boundary > * {
+      display: none;
+    }
+  }
+  @media (width < 600px) {
+    .stage {
+      block-size: 250px;
+    }
+    .stage[data-wallet="true"] {
+      block-size: 290px;
+    }
+  }
+
+  /* ---- The design rule under the stage: LLM proposes, code disposes, a human approves. ---- */
+  .rules {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: var(--spacing-2) var(--spacing-4);
+    margin: var(--spacing-2) 0 0;
+    padding: 0 var(--spacing-1);
+    list-style: none;
+  }
+  .rule {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-1-5);
+    min-inline-size: 0;
+  }
+  .rule-icon {
+    display: inline-grid;
+    place-items: center;
+    inline-size: 20px;
+    block-size: 20px;
+    border-radius: var(--radius-full);
+    background: var(--color-background-muted);
+    color: var(--color-icon-secondary);
+    flex: none;
+  }
+  .rule[data-rule="propose"] .rule-icon {
+    color: var(--color-data-categorical-purple);
+  }
+  .rule[data-rule="dispose"] .rule-icon {
+    color: var(--color-icon-success);
+  }
+  .rule[data-rule="human"] .rule-icon {
+    color: var(--color-data-categorical-pink);
+  }
+  @media (width < 600px) {
+    .rule-line {
+      display: none;
+    }
+    .rules {
+      justify-content: flex-start;
+    }
+  }
+
+  /* ---- The human gate: the canvas dims and the decision rises to focus. ---- */
+  /* The flagged evidence the reviewer must check stays at full strength. */
+  /* Only medallions and chips dim; names and state words stay readable (4.5:1). */
+  .console[data-gate="open"] .stage-slot:not([data-node="approval"]):not(:has([data-state="flagged"])) :is(.stage-node-icon, .stage-chips) {
+    opacity: 0.4;
+    filter: saturate(0.4);
+  }
+  .console[data-gate="open"][data-mode="dark"] .stage-slot:not([data-node="approval"]):not(:has([data-state="flagged"])) :is(.stage-node-icon, .stage-chips) {
+    opacity: 0.55;
+  }
+  .console[data-gate="open"] .stage-boundary {
+    border-color: var(--color-border);
+  }
+  .console[data-gate="open"] .stage-edge:not([data-edge="booking-approval"]):not([data-edge="supervisor-approval"]) {
+    opacity: 0.3;
+  }
+  .console[data-gate="open"] .area-command,
+  .console[data-gate="open"] .chain-item:not(:has([data-tone="flagged"])) > * {
+    opacity: 0.5;
+  }
+  .console[data-gate="open"][data-mode="dark"] .chain-item:not(:has([data-tone="flagged"])) > * {
+    opacity: 0.65;
+  }
+  .console[data-gate="open"] .area-gate .gate-card {
+    border-color: var(--color-accent);
+    box-shadow: var(--shadow-high);
+    animation: gate-rise var(--duration-slow) cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  .gate-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-3);
+  }
+  .gate-head h2,
+  .evidence-head h2 {
+    font-size: var(--font-size-lg);
+  }
+  .gate-head {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-2);
+  }
+  .gate-idle p {
+    margin: 0;
+  }
+  .outcome-facts {
+    display: grid;
+    gap: var(--spacing-1-5);
+    margin: 0;
+  }
+  .outcome-facts > div {
+    display: grid;
+    grid-template-columns: 96px minmax(0, 1fr);
+    align-items: center;
+    gap: var(--spacing-2);
+  }
+  .outcome-facts dt,
+  .chain-detail-facts dt {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm, 13px);
+  }
+  .outcome-facts dd,
+  .chain-detail-facts dd {
+    margin: 0;
+    min-inline-size: 0;
+  }
+  .outcome-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-2);
+    justify-content: flex-start;
+  }
+  [data-testid="outcome-line"],
+  [data-testid="approval-proof"] {
+    margin: 0;
+  }
+  .flag-lines {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .flag-evidence {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--spacing-2);
+    padding: var(--spacing-2) var(--spacing-3);
+    border: 1px solid var(--app-warn-border);
+    border-radius: var(--radius-element);
+  }
+  .flag-evidence ul {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-1-5);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .flag-evidence li {
+    display: flex;
+    flex-direction: column;
+  }
+  .flag-finding .mono {
+    font-size: 12px;
+  }
+  .focus-target:focus {
+    outline: none;
+  }
+  .legs {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-2);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .leg {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "day price" "route route";
+    row-gap: var(--spacing-0-5);
+    padding: var(--spacing-2) var(--spacing-3);
+    border-radius: var(--radius-element);
+    background: var(--color-background-muted);
+  }
+  .leg-day {
+    grid-area: day;
+  }
+  .leg-price {
+    grid-area: price;
+  }
+  .leg-route {
+    grid-area: route;
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-2);
+  }
+  .leg-stop {
+    display: inline-flex;
+    align-items: baseline;
+    gap: var(--spacing-1-5);
+  }
+  .leg-line {
+    position: relative;
+    flex: 1;
+    block-size: 2px;
+    min-inline-size: 24px;
+    background: var(--color-border-emphasized);
+  }
+  .leg-line::after {
+    content: "";
+    position: absolute;
+    inset-inline-end: -1px;
+    top: -3px;
+    border-block: 4px solid transparent;
+    border-inline-start: 6px solid var(--color-border-emphasized);
+  }
+  .leg-choices {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-3);
+  }
+  .leg-choice {
+    padding: var(--spacing-2) var(--spacing-3);
+    border-radius: var(--radius-element);
+    background: var(--color-background-muted);
+  }
+  /* Time range on its own line (never wrapped), duration and train below it. */
+  .leg-option {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    min-inline-size: 0;
+  }
+  .leg-option-time {
+    white-space: nowrap;
+  }
+  /* Badges wrap among themselves; the price stays on one line at the end. */
+  .leg-option-end {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: var(--spacing-0-5);
+  }
+  .leg-option-badges {
+    display: inline-flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: var(--spacing-1);
+  }
+  .leg-option-price {
+    white-space: nowrap;
+  }
+  .leg-count {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: var(--spacing-2);
+    margin-block-start: var(--spacing-1);
+  }
+  .amount {
+    display: flex;
+    flex-direction: column;
+  }
+  .amount .settlement {
+    align-self: flex-start;
+    margin-block-start: var(--spacing-1);
+  }
+  .gate-expired {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--spacing-2);
+  }
+  .gate-expired p {
+    margin: 0;
+  }
+  .gate-total {
+    display: flex;
+    align-items: flex-end;
+    gap: var(--spacing-2);
+    flex-wrap: wrap;
+  }
+  .gate-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-2);
+    flex-wrap: wrap;
+  }
+  .gate-hash {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-1-5);
+  }
+  .gate-actions {
+    display: flex;
+    gap: var(--spacing-2);
+  }
+  .gate-actions > * {
+    flex: 1;
+  }
+  .flag-title {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-1-5);
+  }
+  .flag-details {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-1);
+    max-inline-size: 280px;
+  }
+
+  .approval-bar {
+    position: fixed;
+    inset-inline: var(--spacing-3);
+    inset-block-end: var(--spacing-3);
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-2);
+    padding: var(--spacing-2) var(--spacing-2) var(--spacing-2) var(--spacing-4);
+    border: 1px solid var(--color-accent);
+    border-radius: var(--radius-full);
+    background: var(--color-background-popover);
+    box-shadow: var(--shadow-high);
+    animation: gate-rise var(--duration-medium) ease both;
+  }
+  .approval-bar > :nth-child(2) {
+    flex: 1;
+  }
+  @media (width >= 1100px) {
+    .approval-bar {
+      display: none;
+    }
+  }
+
+  /* ---- Hash chip ---- */
+  .hash-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-1);
+    padding: 1px var(--spacing-1-5);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-inner);
+    background: var(--color-background-muted);
+    color: var(--color-text-primary);
+    font: inherit;
+    cursor: pointer;
+  }
+  .hash-chip:hover {
+    background-image: linear-gradient(var(--color-overlay-hover), var(--color-overlay-hover));
+  }
+  .hash-chip[data-copied="true"] {
+    border-color: var(--color-border-success);
+  }
+  .hash-full,
+  .mono {
+    font-family: var(--font-family-code);
+    word-break: break-all;
+  }
+
+  /* ---- Recent runs: GET /runs, newest first, request already redacted by the server ---- */
+  .recent-runs {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-2);
+    padding: var(--spacing-4);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-container);
+    background: var(--color-background-surface);
+  }
+  .recent-runs-title {
+    font-size: var(--font-size-lg);
+  }
+  .recent-runs-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-0-5);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .recent-run {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: var(--spacing-2);
+    inline-size: 100%;
+    padding: var(--spacing-1) var(--spacing-2);
+    border: 1px solid transparent;
+    border-radius: var(--radius-element);
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: start;
+    cursor: pointer;
+  }
+  .recent-run:hover:not(:disabled) {
+    background: var(--color-background-muted);
+  }
+  .recent-run:focus-visible {
+    outline: 2px solid var(--color-border-info);
+    outline-offset: 1px;
+  }
+  .recent-run[data-current="true"] {
+    border-color: var(--color-border);
+  }
+  .recent-run:disabled {
+    cursor: default;
+    opacity: 0.7;
+  }
+  .recent-run-request {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .recent-run-total {
+    font-variant-numeric: tabular-nums;
+  }
+  .recent-run-end {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-1);
+  }
+
+  /* ---- Evidence: the audit trail as a chain of linked blocks ---- */
+  .evidence {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-3);
+    padding: var(--spacing-4);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-container);
+    background: var(--color-background-surface);
+  }
+  .evidence-head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--spacing-2);
+  }
+  .evidence-title {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--spacing-2);
+    min-inline-size: 0;
+    margin-inline-end: auto;
+  }
+  .evidence-verify {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--spacing-2);
+  }
+  @media (width < 600px) {
+    .evidence-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-areas: "title table" "verify verify";
+      row-gap: var(--spacing-2);
+    }
+    .evidence-title {
+      grid-area: title;
+    }
+    .evidence-table-toggle {
+      grid-area: table;
+    }
+    .evidence-verify {
+      grid-area: verify;
+      justify-content: space-between;
+    }
+  }
+  .evidence-empty,
+  .chain-caption {
+    margin: 0;
+  }
+  .chain-legend {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--spacing-1) var(--spacing-3);
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .chain-legend > li {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-1);
+  }
+  .chain-legend-gap {
+    inline-size: 1px;
+    block-size: 12px;
+    background: var(--color-border);
+  }
+  @media (width < 600px) {
+    .chain-legend-gap {
+      flex-basis: 100%;
+      block-size: 0;
+    }
+  }
+  .chain-break-note {
+    margin: 0;
+    padding: var(--spacing-2) var(--spacing-3);
+    border: 1px solid var(--app-err-border);
+    border-radius: var(--radius-element);
+    background: var(--app-err-bg);
+    color: var(--app-err-fg);
+  }
+  /* A completed, human-reviewed run: the flags are a record, not an alarm. */
+  .flags-note {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--spacing-2);
+    padding: var(--spacing-2) var(--spacing-3);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-element);
+    background: var(--color-background-card);
+  }
+  .flags-note-icon {
+    display: inline-grid;
+    flex: none;
+    padding-block-start: 2px;
+    color: var(--app-warn-strong);
+  }
+  .flags-note-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-inline-size: 0;
+  }
+  /*
+   * Balanced rows (EvidenceChain picks --cols so rows hold the same number of blocks, give or
+   * take one): the first column is a bare block, every other cell is a link that stretches to
+   * the next block. A row never starts with a dangling link, so only a real break looks broken.
+   */
+  .chain {
+    display: grid;
+    grid-template-columns: 38px repeat(calc(var(--cols, 20) - 1), minmax(47px, 1fr));
+    align-items: center;
+    row-gap: var(--spacing-2);
+    margin: 0;
+    padding: var(--spacing-1);
+    list-style: none;
+  }
+  .chain-item {
+    display: flex;
+    align-items: center;
+    min-inline-size: 0;
+    animation: block-in var(--duration-medium) ease both;
+    animation-delay: calc(min(var(--i), 40) * 22ms);
+  }
+  .chain-link {
+    flex: 1;
+    min-inline-size: 9px;
+    block-size: 2px;
+    background: var(--color-border-emphasized);
+  }
+  .chain-block {
+    flex: none;
+  }
+  .chain-link[data-broken="true"] {
+    background: repeating-linear-gradient(90deg, var(--color-error) 0 3px, transparent 3px 6px);
+  }
+  .chain-block {
+    position: relative;
+    display: grid;
+    justify-items: center;
+    align-content: center;
+    gap: 2px;
+    inline-size: 38px;
+    block-size: 50px;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-inner);
+    background: var(--color-background-card);
+    color: var(--color-text-secondary);
+    font: inherit;
+    cursor: pointer;
+  }
+  .chain-block:hover {
+    background-image: linear-gradient(var(--color-overlay-hover), var(--color-overlay-hover));
+  }
+  .chain-block[aria-pressed="true"] {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+  .chain-block:focus-visible {
+    outline: 2px solid var(--color-border-info);
+    outline-offset: 2px;
+  }
+  .chain-seq {
+    font-family: var(--font-family-code);
+    font-size: 11px;
+    line-height: 1;
+    color: var(--color-text-primary);
+  }
+  .chain-actor {
+    display: inline-block;
+    inline-size: 6px;
+    block-size: 6px;
+    border-radius: var(--radius-full);
+    background: var(--actor, var(--color-data-neutral));
+    flex: none;
+  }
+  .chain-block[data-tone="flagged"] {
+    border-color: var(--app-warn-border);
+    background: var(--app-warn-bg);
+    color: var(--app-warn-fg);
+  }
+  .chain-block:is([data-tone="flagged"], [data-broken="true"]) .chain-seq {
+    color: inherit;
+  }
+  .chain-block[data-tone="approved"] {
+    border-color: var(--app-ok-border);
+    background: var(--app-ok-bg);
+    color: var(--app-ok-fg);
+  }
+  .chain-block[data-tone="rejected"] {
+    border-color: var(--app-warn-border);
+    background: var(--app-warn-bg);
+    color: var(--app-warn-fg);
+  }
+  .chain-block:is([data-tone="approved"], [data-tone="rejected"], [data-tone="denied"]) .chain-seq {
+    color: inherit;
+  }
+  .chain-block[data-tone="denied"] {
+    border-color: var(--app-err-border);
+    background: var(--app-err-bg);
+    color: var(--app-err-fg);
+  }
+  .chain-row[data-tone="denied"] {
+    background: color-mix(in srgb, var(--color-error) 12%, transparent);
+  }
+  .chain-block[data-tone="payment"] {
+    border-color: var(--app-ok-border);
+    color: var(--app-ok-strong);
+  }
+  .chain-block[data-tone="wallet"] {
+    border-color: var(--actor);
+  }
+  .chain-block[data-tone="processor"] {
+    border-color: var(--actor);
+  }
+  .chain-block[data-tone="processor-alert"] {
+    border-color: var(--app-warn-border);
+    background: var(--app-warn-bg);
+    color: var(--app-warn-fg);
+  }
+  .chain-block[data-tone="processor-alert"] .chain-seq {
+    color: inherit;
+  }
+  .chain-block[data-broken="true"] {
+    border: 2px solid var(--app-err-strong);
+    background: var(--app-err-bg);
+    color: var(--app-err-fg);
+    animation: shake 0.4s ease 2;
+  }
+  .chain-block[data-after-break="true"] {
+    opacity: 0.45;
+  }
+  .actor-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-1-5);
+  }
+  .chain-table {
+    overflow-x: auto;
+    animation: fade-in var(--duration-fast) ease both;
+  }
+  .chain-detail {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-2);
+    padding: var(--spacing-3);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-element);
+    background: var(--color-background-card);
+    animation: fade-in var(--duration-fast) ease both;
+  }
+  .chain-detail[data-tone="flagged"] {
+    border-color: var(--app-warn-border);
+  }
+  .chain-detail[data-tone="denied"] {
+    border-color: var(--app-err-border);
+  }
+  .chain-detail-head {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--spacing-2);
+  }
+  .chain-detail-close {
+    margin-inline-start: auto;
+  }
+  .chain-detail-facts {
+    display: grid;
+    gap: var(--spacing-1);
+    margin: 0;
+  }
+  .chain-detail-facts > div {
+    display: grid;
+    grid-template-columns: 96px minmax(0, 1fr);
+    align-items: baseline;
+    gap: var(--spacing-2);
+  }
+  .chain-detail-facts .mono {
+    font-size: 12px;
+  }
+  .chain-row[data-tone="flagged"] {
+    background: color-mix(in srgb, var(--color-warning) 14%, transparent);
+  }
+  .chain-row:is([data-tone="approved"], [data-tone="rejected"]) {
+    box-shadow: inset 2px 0 0 var(--color-accent);
+  }
+  .block-tip {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  /* ---- Motion ---- */
+  @keyframes edge-flow {
+    to {
+      stroke-dashoffset: -13;
+    }
+  }
+  @keyframes ring-pulse {
+    0% {
+      box-shadow: 0 0 0 0 color-mix(in srgb, var(--actor) 55%, transparent);
+    }
+    100% {
+      box-shadow: 0 0 0 10px transparent;
+    }
+  }
+  @keyframes ring-pulse-strong {
+    0% {
+      box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-accent) 60%, transparent);
+    }
+    100% {
+      box-shadow: 0 0 0 16px transparent;
+    }
+  }
+  @keyframes gate-rise {
+    from {
+      opacity: 0;
+      transform: translateY(18px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes block-in {
+    from {
+      opacity: 0;
+      transform: translateX(-6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes chip-in {
+    from {
+      opacity: 0;
+      transform: translateY(-3px);
+    }
+  }
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes shake {
+    25% {
+      transform: translateX(-2px);
+    }
+    75% {
+      transform: translateX(2px);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-delay: 0ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+/* Test-mode processor: name where the money step happens. */
+.processor-paid {
+  margin: 0;
+}
+.processor-link {
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-text-accent, currentColor);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.processor-link:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Hosted Checkout: the primary action leaves for the processor's own page. */
+.pay-link {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.375rem 0.875rem;
+  border-radius: var(--radius-element, 8px);
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-decoration: none;
+  color: var(--color-text-on-accent, #fff);
+  background: var(--color-accent);
+}
+.pay-link:hover {
+  filter: brightness(1.08);
+}
+.pay-link:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+.pay-link[aria-disabled="true"] {
+  pointer-events: none;
+  opacity: 0.6;
+}
+
+/* Sign-in screen (live API only; recorded demos need no login). */
+.login-screen {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  background: var(--color-background-body, transparent);
+}
+/* The showcase side is always dark: it sits on a night photograph whatever the theme. */
+.login-hero {
+  position: relative;
+  overflow: hidden;
+  color: #eef2ff;
+  background: #070b1a;
+  min-height: 100vh;
+}
+.login-hero-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 70% 60%;
+}
+.login-hero-shade {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(5, 8, 22, 0.92) 0%, rgba(5, 8, 22, 0.72) 45%, rgba(5, 8, 22, 0.15) 100%),
+    linear-gradient(0deg, rgba(5, 8, 22, 0.85) 0%, rgba(5, 8, 22, 0) 45%);
+}
+.login-hero-content {
+  position: relative;
+  display: grid;
+  align-content: center;
+  gap: 1.25rem;
+  min-height: 100vh;
+  max-width: 34rem;
+  padding: 3rem clamp(1.5rem, 5vw, 4.5rem);
+}
+.login-brand {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
+  color: #b9c3e6;
+}
+.login-brand-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.6rem;
+  background: rgba(125, 211, 252, 0.14);
+  color: #7dd3fc;
+}
+.login-headline {
+  margin: 0;
+  font-size: clamp(1.9rem, 3.2vw, 2.9rem);
+  line-height: 1.08;
+  letter-spacing: -0.02em;
+  font-weight: 650;
+  color: #ffffff;
+  text-wrap: balance;
+}
+.login-sub {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.55;
+  color: #c7d0ee;
+}
+.login-pillars {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.9rem;
+}
+.login-pillars li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.8rem;
+  align-items: start;
+}
+.login-pillars strong {
+  display: block;
+  color: #ffffff;
+  font-weight: 600;
+}
+.login-pillar-line {
+  display: block;
+  color: #aeb9de;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+.login-pillar-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #fcd34d;
+}
+.login-real {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.login-real li {
+  font-size: 0.78rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: 999px;
+  color: #d8f3ff;
+  background: rgba(14, 165, 233, 0.16);
+  border: 1px solid rgba(125, 211, 252, 0.35);
+}
+.login-panel {
+  display: grid;
+  place-items: center;
+  padding: 2rem 1.25rem;
+}
+.login-card {
+  width: min(100%, 400px);
+}
+.login-form {
+  display: grid;
+  gap: 0.875rem;
+}
+.login-lock {
+  display: inline-grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 0.8rem;
+  background: var(--color-background-muted, rgba(127, 127, 127, 0.12));
+}
+.login-roles {
+  margin: 0.25rem 0 0;
+  display: grid;
+  gap: 0.35rem;
+  font-size: 0.82rem;
+}
+.login-roles div {
+  display: grid;
+  grid-template-columns: 5.5rem 1fr;
+  gap: 0.5rem;
+}
+.login-roles dt {
+  font-weight: 600;
+}
+.login-roles dd {
+  margin: 0;
+  opacity: 0.75;
+}
+.login-note {
+  margin: 0;
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  font-size: 0.8rem;
+  opacity: 0.75;
+}
+@media (max-width: 860px) {
+  .login-screen {
+    grid-template-columns: 1fr;
+  }
+  .login-hero,
+  .login-hero-content {
+    min-height: 0;
+  }
+  .login-hero-content {
+    padding: 2rem 1.25rem 2.25rem;
+  }
+  .login-headline {
+    font-size: 1.7rem;
+  }
+  /* Keep the form near the fold on a phone: titles only, details on wider screens. */
+  .login-sub,
+  .login-pillar-line {
+    display: none;
+  }
+  .login-hero-content {
+    gap: 0.9rem;
+  }
+  .login-pillars {
+    gap: 0.5rem;
+  }
+  .login-pillar-icon {
+    width: 1.75rem;
+    height: 1.75rem;
+  }
+}
+.nav-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+@layer app {
+  /* ---- Payment method (the wallet institution): saved card and spending limit. ---- */
+  .wallet-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--spacing-2);
+    flex-wrap: wrap;
+  }
+  .wallet-card {
+    display: flex;
+    align-items: baseline;
+    gap: var(--spacing-2);
+    flex-wrap: wrap;
+    padding: var(--spacing-2) var(--spacing-3);
+    border: 1px solid var(--color-border);
+    border-inline-start: 3px solid var(--color-data-categorical-indigo);
+    border-radius: var(--radius-inner);
+    background: var(--color-background-surface);
+  }
+  .wallet-limit {
+    display: flex;
+    align-items: flex-end;
+    gap: var(--spacing-2);
+    flex-wrap: wrap;
+  }
+  /* The field sizes to its label and help text, not to the short number it holds. */
+  .wallet-limit > :first-child {
+    flex: 1 1 18rem;
+    max-width: 28rem;
+  }
+  .payment-choice {
+    padding-block: var(--spacing-1);
+  }
+}

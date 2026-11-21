@@ -1,0 +1,19 @@
+{
+  "Intent": {
+    "kind": "book_trip",
+    "trip": {
+      "origin": "Zurich HB",
+      "destination": "Bern",
+      "depart_date": "2026-12-01",
+      "return_date": "2026-12-02",
+      "passengers": 1,
+      "outbound_window": {
+        "earliest": "06:00",
+        "latest": "12:00"
+      }
+    }
+  },
+  "Rationale": {
+    "text": "Cheapest 2nd-class fares in the time window on both legs."
+  }
+}

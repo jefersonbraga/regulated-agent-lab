@@ -1,0 +1,8 @@
+provider: vllm            # vllm | anthropic | openai | mock
+model: nvidia/Qwen3.6-35B-A3B-NVFP4
+base_url: ${VLLM_BASE_URL}  # used by provider vllm only
+temperature: 0.0
+timeout_s: 60              # per LLM request; a stalled endpoint fails the run
+max_retries: 1
+thinking: false           # vllm: reasoning before each answer (~20x slower, same results)
+# anthropic: model: claude-sonnet-5-5   openai: model: <openai model id>

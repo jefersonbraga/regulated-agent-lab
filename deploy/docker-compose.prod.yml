@@ -1,0 +1,127 @@
+# Production stack for ONE small VM (built and tested for linux/arm64, e.g. an Oracle Cloud
+# Ampere A1 instance; every base image is multi-arch, so amd64 works too). Single domain, HTTPS:
+#
+#   https://DOMAIN/        -> ui  (nginx, static console, its own security headers)
+#   https://DOMAIN/api/... -> api (FastAPI; /api is stripped, so /api/health -> /health)
+#
+# Only Caddy publishes ports (80 for the ACME challenge and the redirect, 443 TCP + UDP/HTTP3).
+# The UI is built with VITE_API_URL=/api: same origin, so the CSP's connect-src is just 'self'
+# and the SameSite=Strict session cookie always goes along.
+#
+#   cp deploy/.env.prod.example deploy/.env.prod     # fill it in (see deploy/README.md)
+#   docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env.prod up -d --build
+#
+# --env-file feeds DOMAIN etc. into this file; env_file below hands the same file to the API.
+
+name: ral-prod
+
+x-hardening: &hardening
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "5" }
+
+services:
+  caddy:
+    <<: *hardening
+    image: caddy:2.10.2-alpine
+    depends_on:
+      api: { condition: service_healthy }
+      ui: { condition: service_healthy }
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in deploy/.env.prod}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates and ACME account: keep it, or Let's Encrypt rate limits bite on rebuilds.
+      - caddy_data:/data
+      - caddy_config:/config
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    networks:
+      edge:
+        # Fixed address: the only one uvicorn trusts for X-Forwarded-For (see api.command).
+        ipv4_address: ${CADDY_IP:-172.30.250.10}
+    healthcheck:
+      # The admin endpoint listens on 127.0.0.1:2019 inside the container only (not published).
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  api:
+    <<: *hardening
+    build:
+      context: ..
+      dockerfile: api/Dockerfile
+    env_file:
+      - path: .env.prod
+        required: true
+    environment:
+      # Enforced whatever .env.prod says: HTTPS-only cookie + HSTS, and never without login.
+      COOKIE_SECURE: "1"
+      API_AUTH_DISABLED: "0"
+    # Same as the image's CMD, plus: trust X-Forwarded-For/-Proto from Caddy's address only,
+    # so the per-IP login rate limit sees real client IPs and nobody else can spoof them.
+    command:
+      - uvicorn
+      - api.server:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --no-server-header
+      - --proxy-headers
+      - --forwarded-allow-ips
+      - ${CADDY_IP:-172.30.250.10}
+    expose: ["8000"]
+    volumes:
+      # /app/var: audit.jsonl (+ .head), lab.db, payments.db, wallet.db. Back it up (README).
+      - lab_var:/app/var
+    cap_drop: [ALL]
+    networks: [edge]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  ui:
+    <<: *hardening
+    build:
+      context: ../ui
+      args:
+        # Relative: the browser calls https://DOMAIN/api/... (same origin).
+        VITE_API_URL: /api
+    expose: ["8080"]
+    cap_drop: [ALL]
+    networks: [edge]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+networks:
+  edge:
+    ipam:
+      config:
+        # Change both together if this range clashes with something on the VM.
+        - subnet: ${DEPLOY_SUBNET:-172.30.250.0/24}
+
+volumes:
+  lab_var:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,11 @@
+.env
+var/
+.venv/
+node_modules/
+dist/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+# Production env (deploy/.env.prod): real secrets, never committed; only the .example is.
+.env.prod

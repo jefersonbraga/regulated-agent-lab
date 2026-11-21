@@ -1,0 +1,20 @@
+agents:
+  planner: [travel_search.search_trains]
+  pricing: [travel_search.get_fares]
+  # payments.charge: the simulated capture, or (test-mode processor) the off-session charge with
+  # the run's scoped wallet token. payments.create_checkout: hosted Checkout (the customer pays on
+  # the processor's page). payments.checkout_status: read-only ledger view the booking agent
+  # resumes with after the processor reported the checkout. wallet.issue_payment_token: a
+  # single-use token for exactly the approved amount, only when the human chose the wallet.
+  # wallet.redeem_payment_token belongs to the payments institution: no agent may call it.
+  booking:
+    [
+      travel_search.hold_seat,
+      payments.charge,
+      payments.create_checkout,
+      payments.checkout_status,
+      wallet.issue_payment_token,
+    ]
+requires_approval:
+  [payments.charge, payments.create_checkout, wallet.issue_payment_token]
+default: deny

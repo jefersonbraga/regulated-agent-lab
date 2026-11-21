@@ -1,0 +1,33 @@
+# One domain, automatic HTTPS (Let's Encrypt / ZeroSSL; for DOMAIN=localhost Caddy's own CA).
+#   /api/*  -> api:8000 with the /api prefix stripped (/api/health -> /health)
+#   else    -> ui:8080 (nginx with the console's static files)
+#
+# Security headers are the app's own (api/security_headers.py, ui/docker/*.template) and pass
+# through untouched. Caddy only fills HSTS in where an upstream did not send it (its own error
+# responses), drops the Server header, and never adds or relaxes CSP, framing or CORS headers.
+{
+	# Optional ACME contact for expiry notices: uncomment and set ACME_EMAIL in .env.prod
+	# (and pass it to the caddy service).
+	# email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	header {
+		# "?" = only when the response does not already carry it (no duplicate HSTS).
+		?Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+		defer
+	}
+
+	handle_path /api/* {
+		reverse_proxy api:8000 {
+			# Server-sent events (POST /runs/stream, .../approval/stream): flush every write.
+			flush_interval -1
+		}
+	}
+
+	handle {
+		encode zstd gzip
+		reverse_proxy ui:8080
+	}
+}

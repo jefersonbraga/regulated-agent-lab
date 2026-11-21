@@ -1,0 +1,19 @@
+#!/bin/sh
+# Sourced by the nginx image's entrypoint (/docker-entrypoint.d/*.envsh) before it runs envsubst
+# on the templates. Sets API_ORIGIN, the only origin besides 'self' that the CSP's connect-src
+# allows, from the VITE_API_URL the bundle was built with (same rule as ../security-headers.ts):
+#   http(s)://host[:port]/...  -> that origin
+#   /api (a path, the API behind the same reverse proxy) -> "" (connect-src 'self' only)
+# An API_ORIGIN given at run time wins. Anything that is not a plain origin is refused, so a bad
+# value cannot break out of the header.
+if [ -z "${API_ORIGIN+x}" ]; then
+    case "${VITE_API_URL:-}" in
+        http://* | https://*) API_ORIGIN=$(printf '%s' "$VITE_API_URL" | sed -E 's#^(https?://[^/?#]+).*$#\1#') ;;
+        *) API_ORIGIN="" ;;
+    esac
+fi
+if [ -n "$API_ORIGIN" ] && ! printf '%s' "$API_ORIGIN" | grep -Eq '^https?://[A-Za-z0-9.-]+(:[0-9]+)?$'; then
+    echo "api-origin.envsh: API_ORIGIN '$API_ORIGIN' is not an http(s) origin" >&2
+    exit 1
+fi
+export API_ORIGIN
