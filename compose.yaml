@@ -1,0 +1,65 @@
+# Local stack: API (with both MCP servers as stdio subprocesses) + UI.
+#
+#   cp .env.example .env        # set AGENT_TOKEN_SECRET to a random value
+#   docker compose up --build   # UI: http://localhost:5173   API: http://localhost:8000
+#   (or: make up / make down)
+#
+# Images: backend/Dockerfile (context backend/) and frontend/Dockerfile (context frontend/).
+#
+# LLM_PROVIDER defaults to `mock` here so the stack runs offline. vLLM is NOT a service:
+# the model runs on the DGX Spark on the LAN. To use it, put in .env:
+#   LLM_PROVIDER=vllm
+#   VLLM_BASE_URL=http://dgx-spark.local:8000/v1   # LAN address of the DGX, never public
+#
+# The API refuses to start without DEMO_USERS and SESSION_SECRET in .env (or
+# API_AUTH_DISABLED=1, local only; see README "Authentication"). Ports are published on
+# 127.0.0.1 only; publish behind HTTPS with the README's checklist. Test-mode payments only.
+
+services:
+  api:
+    build:
+      context: ./backend
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      AGENT_TOKEN_SECRET: ${AGENT_TOKEN_SECRET:?set AGENT_TOKEN_SECRET in .env (see .env.example)}
+      AUDIT_LOG_PATH: /app/var/audit.jsonl
+      # Checkpoints + run history (agents), the payments ledger and the wallet (two separate
+      # institutions): three SQLite files in the same volume, so paused runs, idempotency, saved
+      # cards (references only) and tokens survive restarts.
+      LAB_DB_PATH: /app/var/lab.db
+      PAYMENTS_DB_PATH: /app/var/payments.db
+      WALLET_DB_PATH: /app/var/wallet.db
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      # /app/var (backend/var outside Docker): audit.jsonl (+ .head), lab.db, payments.db,
+      # wallet.db. `docker compose down -v` resets all.
+      - audit:/app/var
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        # The one read endpoint without a session (it says "ok" and nothing else).
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  ui:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: http://localhost:8000
+    ports:
+      - "127.0.0.1:5173:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  audit:

@@ -24,7 +24,7 @@ regulated-sector controls.
 | Control | Proof |
 |---|---|
 | Append-only audit log, SHA-256 hash chain | Tampering with any line makes `verify` fail |
-| Per-agent tool permissions in `controls/tool_policy.yaml` | Pricing agent calling `payments.charge` raises `PolicyViolation` |
+| Per-agent tool permissions in `backend/config/tool_policy.yaml` | Pricing agent calling `payments.charge` raises `PolicyViolation` |
 | Prompt-injection defence: tool output is data, never instructions | Poisoned search result does not change the trajectory and is flagged in the audit log |
 | PII redaction in logs (name, email, document number) | No raw PII in the audit file after a run |
 | Cross-institution boundary: payments is a separate institution and accepts only a scoped agent token | Charge without a valid booking-agent token is refused by the server |
@@ -34,7 +34,7 @@ regulated-sector controls.
 ## Models
 
 - Default: on-prem vLLM on DGX Spark (OpenAI-compatible endpoint), `Qwen3.6-35B-A3B-NVFP4`.
-- Switch to Anthropic or OpenAI with one line in `config/llm.yaml`.
+- Switch to Anthropic or OpenAI with one line in `backend/config/llm.yaml`.
 - CI uses a mock model: tests depend on neither the DGX nor API keys.
 - The DGX is never exposed to the internet. The public demo is a video.
 

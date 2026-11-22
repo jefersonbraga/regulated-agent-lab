@@ -1,4 +1,5 @@
 .env
+# Runtime data (audit log, SQLite files): backend/var/ by default; any var/ directory is ignored.
 var/
 .venv/
 node_modules/
@@ -7,5 +8,5 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .ruff_cache/
-# Production env (deploy/.env.prod): real secrets, never committed; only the .example is.
+# Production env (infra/.env.prod): real secrets, never committed; only the .example is.
 .env.prod

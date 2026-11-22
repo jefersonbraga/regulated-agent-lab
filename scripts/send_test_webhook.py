@@ -8,11 +8,12 @@ Reconciliation (``POST /reconcile``) compares runs with the processor's own reco
 synthetic refund of a payment that was not refunded shows up there as ``settlement_mismatch``
 and is corrected back.
 
-    uv run python scripts/send_test_webhook.py refunded --latest
-    uv run python scripts/send_test_webhook.py confirmed --payment-id pi_123
-    uv run python scripts/send_test_webhook.py disputed --latest --livemode   # rejected (test only)
+    W="uv run --project backend python scripts/send_test_webhook.py"   # from the repo root
+    $W refunded --latest
+    $W confirmed --payment-id pi_123
+    $W disputed --latest --livemode   # rejected (test only)
     # the same --event-id twice shows an idempotent replay (second answer: duplicate)
-    uv run python scripts/send_test_webhook.py confirmed --latest --event-id evt_synthetic_1
+    $W confirmed --latest --event-id evt_synthetic_1
 
 ``--latest`` reads the newest test-mode capture from the payments ledger (``PAYMENTS_DB_PATH``,
 read-only). The secret is read from the environment or ``.env``; it is never printed.
@@ -32,9 +33,13 @@ from pathlib import Path
 import httpx
 from dotenv import load_dotenv
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# Without the installed package (a plain `python scripts/...`), import it from backend/src.
+_SRC = Path(__file__).resolve().parent.parent / "backend" / "src"
+if _SRC.is_dir():
+    sys.path.insert(0, str(_SRC))
 
-from mcp_servers.payments_sandbox import events  # noqa: E402
+from regulated_agent_lab import paths  # noqa: E402
+from regulated_agent_lab.services.payments import events  # noqa: E402
 
 KINDS = {
     "confirmed": "payment_intent.succeeded",
@@ -128,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     amount, currency = args.amount_cents, args.currency
     if args.latest:
-        db = os.environ.get("PAYMENTS_DB_PATH") or "var/payments.db"
+        db = os.environ.get("PAYMENTS_DB_PATH") or str(paths.VAR_DIR / "payments.db")
         payment_id, ledger_amount, currency = latest_capture(db)
         amount = ledger_amount if amount is None else amount
     else:

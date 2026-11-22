@@ -1,0 +1,19 @@
+# pre-commit install   (then the hooks run on every commit; `pre-commit run -a` for all files)
+# The ruff rev matches the ruff version locked in backend/uv.lock; both read backend/pyproject.toml.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.17.6
+    hooks:
+      - id: ruff-check
+        args: [--config, backend/pyproject.toml]
+        files: ^(backend|scripts)/
+      - id: ruff-format
+        args: [--config, backend/pyproject.toml]
+        files: ^(backend|scripts)/
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-yaml
+      - id: check-added-large-files

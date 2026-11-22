@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke test of a deployed stack (deploy/): HTTPS, security headers, the public surface.
+# Smoke test of a deployed stack (infra/): HTTPS, security headers, the public surface.
 #
 #   scripts/smoke_prod.sh lab-demo.duckdns.org
 #   SMOKE_INSECURE=1 scripts/smoke_prod.sh localhost:8443   # local test, Caddy's internal CA

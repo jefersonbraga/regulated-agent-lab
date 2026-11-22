@@ -123,43 +123,48 @@ No time in the request means trains from 07:00, and the approval card says so.
 **Design rule: the LLM proposes, code disposes.** The LLM only produces typed structured output
 (the trip request, including an optional departure window per leg, and a display rationale). Code makes every tool call and does the routing,
 the fare selection and the payment, behind one policy gate. That keeps trajectories testable
-and auditable. Details, a sequence diagram and five ADRs are in
-[`docs/architecture.md`](docs/architecture.md). STRIDE and the regulatory mapping are in
+and auditable. Details and sequence diagrams are in
+[`docs/architecture.md`](docs/architecture.md), the seven decision records in [`docs/adr/`](docs/adr/).
+STRIDE and the regulatory mapping are in
 [`docs/threat-model.md`](docs/threat-model.md).
 
 ## Controls
 
 | Control | How it is tested | Test file |
 |---|---|---|
-| Append-only audit log with a SHA-256 hash chain | An edited, deleted or reordered line makes `verify` fail at the first bad `seq`; a log cut from the end or emptied fails against the head anchor. `verify` reads under a shared file lock, so polling it during a run never reports a false alarm. A writer that crashes between fsyncing its line and replacing the head leaves one valid entry past the head: the next append rolls the head forward and audits `head_recovered`; two or more entries past the head are still refused. The chain stays valid across every scenario | `tests/test_audit_log.py` (incl. `::test_truncated_tail_detected`, `::test_verify_during_append_sees_a_consistent_snapshot`, `::test_crash_between_line_and_head_recovers_on_next_append`), `evals/test_guards.py::test_audit_chain_valid_after_every_scenario` |
-| Per-agent tool permissions (`controls/tool_policy.yaml`, default deny) | Pricing agent calling `payments.charge` raises `PolicyViolation`. End to end the run is `refused` and the call never reaches the server | `tests/test_policy.py`, `evals/test_guards.py::test_policy_blocks_pricing_payment_end_to_end` |
-| Human approval before payment (LangGraph `interrupt`) | The run pauses at `awaiting_approval` before any seat is held. Reject means no hold and no charge. A double approval means one capture and one set of holds | `tests/test_graph.py`, `tests/test_api.py` |
-| Prompt-injection defence: tool output is data | A poisoned search result is flagged and sanitized and reaches the LLM only inside `<untrusted_tool_data>`. The trajectory and the charged amount stay the same as the clean run | `tests/test_injection_guard.py`, `tests/test_gated_client.py`, `evals/test_guards.py::test_poisoned_note_never_reaches_llm_prompt_raw`, `evals/test_trajectories.py` |
-| PII redaction in logs | No raw name, email or passport number in the audit file after a run | `tests/test_redaction.py`, `evals/test_guards.py::test_no_raw_pii_in_audit_file` |
-| Cross-institution boundary: scoped agent token | The payments server refuses a pricing-agent token, a token for another server, an expired token, or a missing approval | `tests/test_payments.py`, `tests/test_policy.py` |
-| Charge bound to the human's selection | The approval names one offered fare per leg (`fare_ids`) and the hash returned by `POST /runs/{id}/quote` for it. A fare outside the offer, not one per leg, another hash, or a quote or offer edited after display rejects the run (`quote_mismatch`) with no hold and no charge. An approved alternative is charged exactly its recomputed total. `booking_hold` and `booking_pay` recompute the hash again | `tests/test_graph.py::test_selection_outside_the_offer_is_rejected_and_never_charged`, `::test_approval_of_an_alternative_charges_exactly_its_recomputed_total`, `::test_approval_node_recomputes_quote_hash`, `::test_booking_pay_recomputes_quote_hash`, `tests/test_api.py::test_quote_endpoint_errors` |
-| Charge only for a live offer and live seat holds | An approval after the offer's `approve_before` (15 minutes) is rejected; `booking_pay` refuses to charge expired holds | `tests/test_graph.py::test_approval_after_offer_expiry_is_rejected`, `::test_booking_pay_refuses_expired_holds` |
-| API authentication | No `DEMO_USERS`/`SESSION_SECRET`: the app refuses to start. Every endpoint but `/health`, login/logout and the signed webhook answers 401 without a session; forged, expired, revoked or role-changed sessions are refused; a `POST` without an allowed `Origin` is 403; the approver is the signed-in user whatever the body says; roles and `REQUIRE_SEPARATE_APPROVER` give 403 (audited); logins and runs are rate limited (429, `Retry-After`) | `tests/test_auth.py` |
-| Agent-platform wallet: scoped single-use token | Saving a card uses the processor's hosted form in `mode=setup`; only the processor ids, brand, last four digits and expiry are stored; the mandate (limit per booking, integer cents) is audited when changed; `wallet.issue_payment_token` is booking-only, needs the approval token and the human's wallet choice for that payer; the token is single use, bound to exactly the approved amount, currency, merchant and run, 15 minutes; a replay, mismatch, other run or expiry is refused and nothing is charged; the charge is an off-session PaymentIntent with the run id as idempotency key; the model's prompts and the audit never contain card data or the token | `tests/test_wallet.py` |
-| SCA, over-limit or no card: fall back to the hosted page | The processor's `authentication_required` (or `requires_action`), a total above the mandate, an expired or missing card: the run opens a Checkout for the same amount, says why (`payment_fallback`), and completes with one capture | `tests/test_wallet.py::test_sca_required_falls_back_to_checkout_and_completes_once`, `::test_over_the_mandate_the_wallet_is_not_proposed_and_falls_back`, `::test_no_saved_card_falls_back_to_checkout` |
-| Hosted Checkout completes only on processor truth | Session created for exactly the approved total with run id, quote hash and idempotency key; `payments.create_checkout` is booking-only and needs the approval token; the run pauses at `awaiting_payment`; a signed webhook or a refresh completes it, racing each other they capture once; another amount is refused (`amount_mismatch`); expiry and cancel fail the run; the receipt URL is stored in both flows | `tests/test_checkout.py` |
-| Processor events are verified, stored once and never trusted blindly | `POST /webhooks/stripe` checks the `v1` HMAC signature in constant time with a 300 s timestamp tolerance (bad, missing or old: 400, nothing stored; no secret: 503). A replayed event id is acknowledged with no second effect; a `livemode` event is recorded but never applied; an unknown payment is recorded as unmatched. Reconciliation reads every test-mode capture back from the processor and reports each kind of discrepancy | `tests/test_processor_events.py`, `tests/test_reconcile.py` |
-| Evals for a non-deterministic system | 18 scenarios (normal, malicious, invalid) assert status, the exact tool trajectory, forbidden tools and amounts, never free text | `evals/scenarios.jsonl`, `evals/test_trajectories.py` |
+| Append-only audit log with a SHA-256 hash chain | An edited, deleted or reordered line makes `verify` fail at the first bad `seq`; a log cut from the end or emptied fails against the head anchor. `verify` reads under a shared file lock, so polling it during a run never reports a false alarm. A writer that crashes between fsyncing its line and replacing the head leaves one valid entry past the head: the next append rolls the head forward and audits `head_recovered`; two or more entries past the head are still refused. The chain stays valid across every scenario | `backend/tests/unit/test_audit_log.py` (incl. `::test_truncated_tail_detected`, `::test_verify_during_append_sees_a_consistent_snapshot`, `::test_crash_between_line_and_head_recovers_on_next_append`), `backend/evals/test_guards.py::test_audit_chain_valid_after_every_scenario` |
+| Per-agent tool permissions (`backend/config/tool_policy.yaml`, default deny) | Pricing agent calling `payments.charge` raises `PolicyViolation`. End to end the run is `refused` and the call never reaches the server | `backend/tests/unit/test_policy.py`, `backend/evals/test_guards.py::test_policy_blocks_pricing_payment_end_to_end` |
+| Human approval before payment (LangGraph `interrupt`) | The run pauses at `awaiting_approval` before any seat is held. Reject means no hold and no charge. A double approval means one capture and one set of holds | `backend/tests/integration/test_graph.py`, `backend/tests/integration/test_api.py` |
+| Prompt-injection defence: tool output is data | A poisoned search result is flagged and sanitized and reaches the LLM only inside `<untrusted_tool_data>`. The trajectory and the charged amount stay the same as the clean run | `backend/tests/unit/test_injection_guard.py`, `backend/tests/integration/test_gated_client.py`, `backend/evals/test_guards.py::test_poisoned_note_never_reaches_llm_prompt_raw`, `backend/evals/test_trajectories.py` |
+| PII redaction in logs | No raw name, email or passport number in the audit file after a run | `backend/tests/unit/test_redaction.py`, `backend/evals/test_guards.py::test_no_raw_pii_in_audit_file` |
+| Cross-institution boundary: scoped agent token | The payments server refuses a pricing-agent token, a token for another server, an expired token, or a missing approval | `backend/tests/integration/test_payments.py`, `backend/tests/unit/test_policy.py` |
+| Charge bound to the human's selection | The approval names one offered fare per leg (`fare_ids`) and the hash returned by `POST /runs/{id}/quote` for it. A fare outside the offer, not one per leg, another hash, or a quote or offer edited after display rejects the run (`quote_mismatch`) with no hold and no charge. An approved alternative is charged exactly its recomputed total. `booking_hold` and `booking_pay` recompute the hash again | `backend/tests/integration/test_graph.py::test_selection_outside_the_offer_is_rejected_and_never_charged`, `::test_approval_of_an_alternative_charges_exactly_its_recomputed_total`, `::test_approval_node_recomputes_quote_hash`, `::test_booking_pay_recomputes_quote_hash`, `backend/tests/integration/test_api.py::test_quote_endpoint_errors` |
+| Charge only for a live offer and live seat holds | An approval after the offer's `approve_before` (15 minutes) is rejected; `booking_pay` refuses to charge expired holds | `backend/tests/integration/test_graph.py::test_approval_after_offer_expiry_is_rejected`, `::test_booking_pay_refuses_expired_holds` |
+| API authentication | No `DEMO_USERS`/`SESSION_SECRET`: the app refuses to start. Every endpoint but `/health`, login/logout and the signed webhook answers 401 without a session; forged, expired, revoked or role-changed sessions are refused; a `POST` without an allowed `Origin` is 403; the approver is the signed-in user whatever the body says; roles and `REQUIRE_SEPARATE_APPROVER` give 403 (audited); logins and runs are rate limited (429, `Retry-After`) | `backend/tests/integration/test_auth.py` |
+| Agent-platform wallet: scoped single-use token | Saving a card uses the processor's hosted form in `mode=setup`; only the processor ids, brand, last four digits and expiry are stored; the mandate (limit per booking, integer cents) is audited when changed; `wallet.issue_payment_token` is booking-only, needs the approval token and the human's wallet choice for that payer; the token is single use, bound to exactly the approved amount, currency, merchant and run, 15 minutes; a replay, mismatch, other run or expiry is refused and nothing is charged; the charge is an off-session PaymentIntent with the run id as idempotency key; the model's prompts and the audit never contain card data or the token | `backend/tests/integration/test_wallet.py` |
+| SCA, over-limit or no card: fall back to the hosted page | The processor's `authentication_required` (or `requires_action`), a total above the mandate, an expired or missing card: the run opens a Checkout for the same amount, says why (`payment_fallback`), and completes with one capture | `backend/tests/integration/test_wallet.py::test_sca_required_falls_back_to_checkout_and_completes_once`, `::test_over_the_mandate_the_wallet_is_not_proposed_and_falls_back`, `::test_no_saved_card_falls_back_to_checkout` |
+| Hosted Checkout completes only on processor truth | Session created for exactly the approved total with run id, quote hash and idempotency key; `payments.create_checkout` is booking-only and needs the approval token; the run pauses at `awaiting_payment`; a signed webhook or a refresh completes it, racing each other they capture once; another amount is refused (`amount_mismatch`); expiry and cancel fail the run; the receipt URL is stored in both flows | `backend/tests/integration/test_checkout.py` |
+| Processor events are verified, stored once and never trusted blindly | `POST /webhooks/stripe` checks the `v1` HMAC signature in constant time with a 300 s timestamp tolerance (bad, missing or old: 400, nothing stored; no secret: 503). A replayed event id is acknowledged with no second effect; a `livemode` event is recorded but never applied; an unknown payment is recorded as unmatched. Reconciliation reads every test-mode capture back from the processor and reports each kind of discrepancy | `backend/tests/integration/test_processor_events.py`, `backend/tests/integration/test_reconcile.py` |
+| Evals for a non-deterministic system | 18 scenarios (normal, malicious, invalid) assert status, the exact tool trajectory, forbidden tools and amounts, never free text | `backend/evals/scenarios.jsonl`, `backend/evals/test_trajectories.py` |
 
 ## How to run
 
 Requirements: Python 3.12 with [uv](https://docs.astral.sh/uv/), and Node 22 for the UI.
+The backend is a uv project in `backend/` and the console an npm project in `frontend/`; the
+root `Makefile` wraps the usual commands (`make help` lists them).
 
 ```bash
-uv sync
+make install                    # = cd backend && uv sync; cd frontend && npm ci
 ```
+
+Python commands below run from `backend/` (`cd backend`), npm commands from `frontend/`.
 
 The examples below pass a demo `AGENT_TOKEN_SECRET` inline, so they work without a `.env`.
 The secret signs the agent tokens. There is no default in code, so without it every gated call
 is refused (fail closed). For your own setup, run `cp .env.example .env` and set
 `AGENT_TOKEN_SECRET` there to a random value.
 
-### Choose the model: `config/llm.yaml`
+### Choose the model: `backend/config/llm.yaml`
 
 ```yaml
 provider: vllm            # vllm | anthropic | openai | mock
@@ -175,7 +180,7 @@ thinking: false           # vllm: reasoning before each answer (~20x slower, sam
   OpenAI-compatible endpoint on the LAN. The DGX is never exposed to the internet. If the
   endpoint needs a key, set `VLLM_API_KEY` (cloud keys are never sent to it). If
   `VLLM_BASE_URL` is unset, the CLI and API refuse to start (`LLMConfigError`) instead of falling
-  back to a cloud endpoint (`tests/test_llm.py::test_vllm_without_base_url_fails_instead_of_falling_back_to_cloud`).
+  back to a cloud endpoint (`backend/tests/unit/test_llm.py::test_vllm_without_base_url_fails_instead_of_falling_back_to_cloud`).
   `base_url` is ignored for `anthropic` and `openai`, so switching provider is one line even
   with `VLLM_BASE_URL` still set. At startup the API checks that the endpoint answers, accepts
   the key and serves `model:`, and logs a warning naming the problem if not (it still starts).
@@ -191,7 +196,7 @@ thinking: false           # vllm: reasoning before each answer (~20x slower, sam
 - **OpenAI:** set `provider: openai`, put an OpenAI model id in `model:`, and set
   `OPENAI_API_KEY`.
 - **Mock (offline, no keys):** export `LLM_PROVIDER=mock`. This overrides the file. The mock
-  answers from `agents/fixtures/mock_roundtrip.json`: a fixed trip on 1 December 2026, back on
+  answers from `backend/src/regulated_agent_lab/agents/fixtures/mock_roundtrip.json`: a fixed trip on 1 December 2026, back on
   2 December, whatever dates the message names. Demo prompts use those explicit dates.
 
 ### Real timetable and test-mode payments (opt-in)
@@ -216,29 +221,34 @@ Both are off by default; set them in `.env` and restart the API. The header show
 ### Terminal
 
 ```bash
-LLM_PROVIDER=mock AGENT_TOKEN_SECRET=demo-only uv run python -m agents.cli \
+cd backend
+LLM_PROVIDER=mock AGENT_TOKEN_SECRET=demo-only uv run ral-cli \
   "Train from Zurich to Bern on 1 December in the morning, back the next day, 1 adult." \
-  --mock-fixtures agents/fixtures/mock_roundtrip.json
+  --mock-fixtures src/regulated_agent_lab/agents/fixtures/mock_roundtrip.json
+# ral-cli is the installed entry point for: uv run python -m regulated_agent_lab.agents.cli
 # prints the quote, asks "Approve? [y/N]", then prints the payment and the audit verify result
 ```
 
 No answer (closed or non-interactive stdin, or Ctrl-C at the prompt) counts as `N`: the run ends
-`rejected` with no charge (`tests/test_cli.py::test_cli_no_answer_at_prompt_rejects`).
+`rejected` with no charge (`backend/tests/integration/test_cli.py::test_cli_no_answer_at_prompt_rejects`).
 
-Leave out `LLM_PROVIDER=mock` and `--mock-fixtures` to use the provider in `config/llm.yaml`.
+Leave out `LLM_PROVIDER=mock` and `--mock-fixtures` to use the provider in `backend/config/llm.yaml`.
 If `AGENT_TOKEN_SECRET` is not set (inline or in `.env`), the CLI prints a one-line hint and
 exits with status 2.
 
 ### API and UI
 
 ```bash
-API_AUTH_DISABLED=1 LLM_PROVIDER=mock AGENT_TOKEN_SECRET=demo-only uv run uvicorn api.server:app
-cd ui && npm ci && npm run dev                          # http://localhost:5173, second terminal
+cd backend && API_AUTH_DISABLED=1 LLM_PROVIDER=mock AGENT_TOKEN_SECRET=demo-only \
+  uv run uvicorn regulated_agent_lab.api.server:app      # http://localhost:8000 (or: make dev-api)
+cd frontend && npm ci && npm run dev                     # http://localhost:5173, second terminal
+                                                         # (or: make dev-ui)
 ```
 
 `API_AUTH_DISABLED=1` is the quickest local start (no login, loud warning in the log). Without
 it the API needs demo users, see [Authentication](#authentication). With a `.env`, start the API
-with `uv run uvicorn api.server:app --env-file .env --no-server-header` instead.
+with `cd backend && uv run uvicorn regulated_agent_lab.api.server:app --env-file ../.env
+--no-server-header` instead (`make dev-api` does this when `.env` exists).
 
 Open the UI at `http://localhost:5173`. CORS allows that origin and `http://localhost:4173`
 (`npm run build && npm run preview`) only. To see the injection guard, start the API with
@@ -260,7 +270,7 @@ bodies and return server-sent events (`data: {json}` per event) as the graph run
 (`flagged`), `tool_error` and `policy_denied` in between, `status` on each change, and a final
 `status` and `run_view` (the same JSON as `GET /runs/{run_id}`). Events carry node, agent and
 tool names, flags and statuses only, never tool args, results or the user's message
-(`tests/test_api_stream.py`). The run keeps going if the client disconnects, under the same
+(`backend/tests/integration/test_api_stream.py`). The run keeps going if the client disconnects, under the same
 per-run lock, so a streamed and a plain approval still give one capture.
 
 The UI is built with the Astryx design system (neutral theme, light and dark mode follow the
@@ -270,7 +280,7 @@ from, another to go to), one line on each city, suggested trips, and a short for
 return, dates, part of day per leg, 1 to 9 passengers). It composes the request as an English
 sentence, shows it before sending, and sends it through the same path as typed text (the LLM
 extracts, code disposes). The map's travel times are a static copy of `DURATIONS_MIN`, kept equal
-by `tests/test_ui_sync.py`. The chat shows each run's tool calls and status changes, the
+by `backend/tests/integration/test_ui_sync.py`. The chat shows each run's tool calls and status changes, the
 approval card lists the alternatives per leg (time range, duration, product, "direct", fare
 type, price; four per leg with the cheapest and fastest always among them, "Show all" for the
 rest; recommended cheapest preselected), shows the exact total and quote hash of the selection
@@ -291,8 +301,10 @@ and turns off sessions, the Origin check and the rate limits).
 **Create users.** One entry per user, the password typed twice without echo and never printed:
 
 ```bash
-uv run python scripts/hash_password.py alice                  # role "both" (default)
-uv run python scripts/hash_password.py bob --role approver    # or --role requester
+cd backend
+uv run ral-hash-password alice                  # role "both" (default)
+uv run ral-hash-password bob --role approver    # or --role requester
+# same from the repo root: uv run --project backend python scripts/hash_password.py alice
 ```
 
 Join the printed lines with commas into `.env`, in **single quotes** (the hashes contain `$`,
@@ -370,7 +382,7 @@ Here the number is typed only on the processor's hosted page and vaulted by the 
 lab's three institutions (agents, payments, wallet) see processor ids, brand, last four digits
 and expiry, and the agents see not even those: the booking agent receives an opaque token and
 passes it to one tool call. Nothing card-shaped reaches the LLM, the checkpoints, the run history
-or the audit log (the token is redacted there too); `tests/test_wallet.py` checks the prompts
+or the audit log (the token is redacted there too); `backend/tests/integration/test_wallet.py` checks the prompts
 and the audit file for it. Keeping card data out of the model's context is not only a
 compliance choice: a prompt injection cannot exfiltrate what the model never saw.
 
@@ -450,30 +462,30 @@ same at any time. **Cancel payment** closes the page and ends the run.
 
 | What | File (env var) | Owner | Survives an API restart |
 |---|---|---|---|
-| Audit log, hash chain and head anchor | `var/audit.jsonl` + `.head` (`AUDIT_LOG_PATH`) | agents | yes |
-| LangGraph checkpoints (every run's state, incl. a run paused for approval) | `var/lab.db` (`LAB_DB_PATH`) | agents | yes |
-| Run history for `GET /runs` (`runs` table: status, total in cents, payment id, flags, request **after redaction**) | `var/lab.db` (`LAB_DB_PATH`) | agents | yes |
-| Payments ledger (`payments` table, `idempotency_key` PRIMARY KEY) | `var/payments.db` (`PAYMENTS_DB_PATH`) | payments institution | yes |
-| Processor events (`processor_events` table, `event_id` PRIMARY KEY) | `var/payments.db` (`PAYMENTS_DB_PATH`) | payments institution | yes |
-| Wallet: card references (processor ids, brand, last four, expiry), processor Customers, setup sessions, mandates, payment tokens (SHA-256 only, single use) | `var/wallet.db` (`WALLET_DB_PATH`) | wallet institution | yes |
+| Audit log, hash chain and head anchor | `backend/var/audit.jsonl` + `.head` (`AUDIT_LOG_PATH`) | agents | yes |
+| LangGraph checkpoints (every run's state, incl. a run paused for approval) | `backend/var/lab.db` (`LAB_DB_PATH`) | agents | yes |
+| Run history for `GET /runs` (`runs` table: status, total in cents, payment id, flags, request **after redaction**) | `backend/var/lab.db` (`LAB_DB_PATH`) | agents | yes |
+| Payments ledger (`payments` table, `idempotency_key` PRIMARY KEY) | `backend/var/payments.db` (`PAYMENTS_DB_PATH`) | payments institution | yes |
+| Processor events (`processor_events` table, `event_id` PRIMARY KEY) | `backend/var/payments.db` (`PAYMENTS_DB_PATH`) | payments institution | yes |
+| Wallet: card references (processor ids, brand, last four, expiry), processor Customers, setup sessions, mandates, payment tokens (SHA-256 only, single use) | `backend/var/wallet.db` (`WALLET_DB_PATH`) | wallet institution | yes |
 | Per-run locks, seat holds of the simulated travel server | memory | | no |
 
 The payments server never opens the agents' database: it is a separate institution with its
 own file. Because `idempotency_key` (= run id) is the primary key, a key is captured once even
 across server restarts, two server processes or concurrent connections
-(`tests/test_payments_ledger.py`). The API opens `var/lab.db` in its lifespan with the official
+(`backend/tests/integration/test_payments_ledger.py`). The API opens `backend/var/lab.db` in its lifespan with the official
 async SQLite checkpointer, using the same restricted deserializer as before (only the
-`agents.state` models are revived; `tests/test_persistence.py`).
+`regulated_agent_lab.agents.state` models are revived; `backend/tests/integration/test_persistence.py`).
 
 **Pause, restart, approve.** A run waiting for approval survives a restart of the API (same
 `AGENT_TOKEN_SECRET`): start a run, stop the API, start it again, and approve it from the UI
 (Recent runs → the paused run) or with `POST /runs/{run_id}/approval`. The offer still expires
 15 minutes after pricing, so approve within that window or start a new run.
 
-**Reset:** stop the API, then `rm -f var/lab.db* var/payments.db* var/wallet.db*` (the
-`-wal`/`-shm` files go too). Delete `var/audit.jsonl*` as well for a clean audit chain; the log alone, without the
+**Reset:** stop the API, then `rm -f backend/var/lab.db* backend/var/payments.db* backend/var/wallet.db*` (the
+`-wal`/`-shm` files go too). Delete `backend/var/audit.jsonl*` as well for a clean audit chain; the log alone, without the
 databases, still verifies. In Docker: `docker compose down -v`. Tests and evals never use
-`var/`: they point both variables at a temporary directory.
+`backend/var/`: they point both variables at a temporary directory.
 
 ### After the payment: events and reconciliation
 
@@ -500,7 +512,8 @@ ways, both in **test mode only**:
     stops redelivering it, and recorded because a live event at a test endpoint means a
     misconfigured endpoint, which someone should see.
 - **Reconciliation (pull).** `POST /reconcile`, or
-  `uv run python -m mcp_servers.payments_sandbox.reconcile` (`--json`, `--no-audit`), reads every
+  `cd backend && uv run ral-reconcile` (`--json`, `--no-audit`; the module is
+  `regulated_agent_lab.services.payments.reconcile`), reads every
   `stripe_test` capture back from the processor (`GET /v1/payment_intents/{id}` with the latest
   charge expanded) and compares status, amount and currency with the ledger and the events
   received. It reports `missing_at_processor`, `amount_mismatch`, `refunded`, `disputed`,
@@ -524,7 +537,7 @@ disputed runs.
 ```bash
 stripe listen --forward-to localhost:8000/webhooks/stripe
 # prints "Your webhook signing secret is whsec_..." -> put it in .env:
-# STRIPE_WEBHOOK_SECRET=whsec_...   then restart the API (uvicorn ... --env-file .env)
+# STRIPE_WEBHOOK_SECRET=whsec_...   then restart the API (uvicorn ... --env-file ../.env)
 ```
 
 Without the CLI, `scripts/send_test_webhook.py` builds a **synthetic** event (id
@@ -532,9 +545,10 @@ Without the CLI, `scripts/send_test_webhook.py` builds a **synthetic** event (id
 (any value you also give the API) and posts it to the local API:
 
 ```bash
-uv run python scripts/send_test_webhook.py confirmed --latest     # newest test-mode capture
-uv run python scripts/send_test_webhook.py refunded --payment-id pi_...
-uv run python scripts/send_test_webhook.py disputed --latest --livemode   # shows the rejection
+# from the repo root
+uv run --project backend python scripts/send_test_webhook.py confirmed --latest   # newest capture
+uv run --project backend python scripts/send_test_webhook.py refunded --payment-id pi_...
+uv run --project backend python scripts/send_test_webhook.py disputed --latest --livemode
 ```
 
 A synthetic event is not the processor's word: reconciliation compares with the processor's
@@ -545,12 +559,15 @@ the processor says.
 
 ```bash
 cp .env.example .env            # AGENT_TOKEN_SECRET, and DEMO_USERS + SESSION_SECRET (or API_AUTH_DISABLED=1)
-docker compose up --build       # UI http://localhost:5173, API http://localhost:8000
+docker compose up --build       # UI http://localhost:5173, API http://localhost:8000 (make up)
+docker compose down             # (make down); `down -v` also deletes the data volume
 ```
 
-In compose, `LLM_PROVIDER` defaults to `mock`. Set `LLM_PROVIDER=vllm` and `VLLM_BASE_URL` in
+`compose.yaml` builds `backend/Dockerfile` (context `backend/`) and `frontend/Dockerfile`
+(context `frontend/`); `make build` builds both images. In compose, `LLM_PROVIDER` defaults to `mock`. Set `LLM_PROVIDER=vllm` and `VLLM_BASE_URL` in
 `.env` to use the DGX. vLLM is not a compose service. Ports bind to `127.0.0.1` only, and the
-audit log and both SQLite files (`lab.db`, `payments.db`) persist in the `audit` volume. The
+audit log and the SQLite files (`lab.db`, `payments.db`, `wallet.db`) persist in the `audit`
+volume (mounted at `/app/var`, the image's equivalent of `backend/var/`). The
 health check uses `GET /health`, the one read endpoint without a session.
 
 ### Publishing checklist
@@ -559,7 +576,7 @@ Before the console is reachable from the internet:
 
 1. **HTTPS** in front of both the UI and the API (a reverse proxy or the platform's TLS), and
    `COOKIE_SECURE=1`, so the session cookie never travels in clear.
-2. **Users and secret:** `DEMO_USERS` from `scripts/hash_password.py` (strong passwords) and a
+2. **Users and secret:** `DEMO_USERS` from `ral-hash-password` (strong passwords) and a
    random `SESSION_SECRET` (32+ characters). Never `API_AUTH_DISABLED=1`. Consider
    `REQUIRE_SEPARATE_APPROVER=1` with a requester and an approver account.
 3. **Origins:** `API_EXTRA_CORS_ORIGINS=https://<ui host>` (exact origin), and the UI built with
@@ -575,34 +592,42 @@ Before the console is reachable from the internet:
    on-prem model on the LAN is not reachable from a public host, and must not be exposed.
 7. **Proxy:** uvicorn with `--proxy-headers --forwarded-allow-ips=<proxy ip>` so the login rate
    limit sees client IPs; one API process (the locks and rate limits are per process).
-8. Keep `var/` on a private volume; it holds the audit log and the three databases.
+8. Keep `backend/var/` on a private volume; it holds the audit log and the three databases.
 
-A ready-made single-domain HTTPS deploy (Caddy + compose, one free ARM VM) that does all of the above: [deploy/README.md](deploy/README.md).
+A ready-made single-domain HTTPS deploy (Caddy + compose, one free ARM VM) that does all of the
+above: [infra/README.md](infra/README.md) (`make prod-up`, then `make smoke DOMAIN=...`).
 
 ### Tests
 
 ```bash
-LLM_PROVIDER=mock AGENT_TOKEN_SECRET=test uv run pytest -v   # unit tests + scenario evals
-uv run ruff check . && uv run ruff format --check .
-cd ui && npm run typecheck && npm test -- --run
-VLLM_BASE_URL=http://<dgx>:8000/v1 uv run pytest -m live evals   # live model, prints a pass-rate
+make test          # backend (unit + integration + scenario evals) and frontend tests
+make lint          # ruff check + ruff format --check (backend/ and scripts/)
+make evals         # scenario evals only, mock model
+make evals-live    # live model: VLLM_BASE_URL=http://<dgx>:8000/v1 make evals-live
+
+# the same without make
+cd backend && LLM_PROVIDER=mock AGENT_TOKEN_SECRET=test uv run pytest -v   # tests/unit, tests/integration, evals
+cd backend && uv run ruff check . && uv run ruff format --check .
+cd frontend && npm run typecheck && npm test -- --run
+cd backend && VLLM_BASE_URL=http://<dgx>:8000/v1 uv run pytest -m live evals   # prints a pass-rate
 ```
 
-`pytest -m live` uses the provider in `config/llm.yaml` (or `LLM_PROVIDER`, or
+`pytest -m live` uses the provider in `backend/config/llm.yaml` (or `LLM_PROVIDER`, or
 `LIVE_LLM_PROVIDER` for the live rows only). It needs `VLLM_BASE_URL` for vllm, or
 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` for the cloud providers, and skips otherwise.
 
-CI (`.github/workflows/ci.yml`) runs lint, tests and evals with the mock model. It needs no
-GPU, endpoint or secrets.
+CI (`.github/workflows/ci.yml`) has one job per component: `backend` (lint, tests and evals with
+the mock model, in `backend/`) and `frontend` (typecheck, tests, build, in `frontend/`). It needs
+no GPU, endpoint or secrets.
 
 ## Security headers
 
-- **API** (`api/security_headers.py`, every response, including errors, CORS preflights and
+- **API** (`backend/src/regulated_agent_lab/api/security_headers.py`, every response, including errors, CORS preflights and
   streams): `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'`,
   `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`,
   `Cache-Control: no-store`, a restrictive `Permissions-Policy`, and HSTS when
   `COOKIE_SECURE=1` (HTTPS). The container runs uvicorn with `--no-server-header`.
-- **Console** (`ui/security-headers.ts` for `vite preview`, `ui/docker/*.template` for the nginx
+- **Console** (`frontend/security-headers.ts` for `vite preview`, `frontend/docker/*.template` for the nginx
   image): scripts from the same origin only (no inline scripts exist), `connect-src` limited to
   the API origin, no framing, no plugins, `form-action 'self'`, HSTS, hashed assets cached
   immutably and the page always revalidated. Styles allow `'unsafe-inline'` on purpose: the
@@ -621,21 +646,21 @@ This is a lab, not a production system. Here is what it does not do:
   one process: two API replicas on one `lab.db` could each resume the same run (the payments
   primary key still captures once). A run interrupted mid-node by a crash is not resumed
   automatically. Next step: Postgres (`AsyncPostgresSaver` takes the same `serde=`; the
-  `runs` SQL is portable, see `agents/persistence.py`) and a distributed or row lock.
+  `runs` SQL is portable, see `backend/src/regulated_agent_lab/agents/persistence.py`) and a distributed or row lock.
 - **Names in the request are not redacted.** The message is redacted when it enters the graph
   (`initial_state`), so e-mails and document numbers never reach the model, the checkpoints in
-  `var/lab.db` or the `runs` table. Personal names cannot be caught by pattern and stay in the
+  `backend/var/lab.db` or the `runs` table. Personal names cannot be caught by pattern and stay in the
   checkpoints (gitignored, local). Next step: an encrypting serializer (LangGraph's
   `EncryptedSerializer` around the same allowlisted `JsonPlusSerializer`).
 - **Crashed MCP servers restart, but the call in flight may fail.** When a stdio server dies,
   before or during a call (the MCP session's `Connection closed` error counts as a transport
   failure, not a server answer), the gate audits `transport_reset` and starts a fresh subprocess. Only read-only tools are retried
   in the same call; a hold or charge that was in flight fails the run (it may have reached the
-  server) and the next run works (`tests/test_mcp_reconnect.py`). A server that stays alive but
+  server) and the next run works (`backend/tests/integration/test_mcp_reconnect.py`). A server that stays alive but
   stops answering is handled the same way: every MCP request has a deadline
   (`MCP_CALL_TIMEOUT_S`, default 10 s), after which the gate audits `tool_error` and
   `transport_reset` and rebuilds the client, so a stalled server cannot hang a run or the API's
-  per-run lock. A restarted payments server keeps its idempotency ledger (`var/payments.db`).
+  per-run lock. A restarted payments server keeps its idempotency ledger (`backend/var/payments.db`).
 - **Injection detection is a regex tripwire, not a guarantee.** New phrasings will get past the
   patterns. The real defence is the design rule: tool output cannot change routing, selection
   or amounts, because code decides those. The regex mostly makes attempts visible in the audit
@@ -651,7 +676,7 @@ This is a lab, not a production system. Here is what it does not do:
   `booking_pay` recompute the quote hash before charging, and the gate accepts
   `payments.charge` only with a signed approval token that covers the run, the quote hash, the
   amount and the currency, and whose approver and quote hash match the `approval_ref` sent to
-  the server (`tests/test_gated_client.py::test_charge_without_matching_approval_proof_denied`).
+  the server (`backend/tests/integration/test_gated_client.py::test_charge_without_matching_approval_proof_denied`).
   The payments server checks the agent token, a non-empty
   `approval_ref` and the idempotency key, but it does not verify the approval itself. Next
   step: have the institution verify the approval token (ideally with an asymmetric signature).
@@ -696,14 +721,35 @@ This is a lab, not a production system. Here is what it does not do:
 ## Repository layout
 
 ```
-agents/        supervisor graph, planner/pricing/booking agents, LLM protocol, gated tool client, CLI
-controls/      redaction, audit log, tool policy, agent identity, injection guard
-mcp_servers/   travel_search (simulated timetable), payments_sandbox and wallet (separate institutions)
-api/           FastAPI: runs, approval, payment checks, audit; auth.py (demo users, sessions, rate limits)
-ui/            Vite + React + TypeScript, Astryx design system
-evals/         scenario evals (trajectory + structured output)
-tests/         unit tests per control and server
-docs/          architecture, threat model, spec
-scripts/       dev helpers (send_test_webhook.py: a synthetic signed processor event;
-               hash_password.py: a DEMO_USERS entry)
+.
+├── backend/                     uv project (pyproject.toml, uv.lock, .python-version, Dockerfile)
+│   ├── src/regulated_agent_lab/ the one Python package (src layout); paths.py: config/var locations
+│   │   ├── agents/              supervisor graph, planner/pricing/booking agents, LLM, gated tool client, CLI
+│   │   ├── controls/            redaction, audit log, tool policy, agent identity, injection guard
+│   │   ├── services/            MCP servers: travel_search, payments and wallet (separate institutions)
+│   │   └── api/                 FastAPI: runs, approval, payments, audit; auth (users, sessions, rate limits)
+│   ├── config/                  llm.yaml (model provider), tool_policy.yaml (per-agent allowlist)
+│   ├── tests/unit/              pure functions and classes (controls, pricing, LLM config, timetable)
+│   ├── tests/integration/       API, graph, MCP client chains, stdio servers, subprocesses, repo checks
+│   ├── evals/                   scenario evals (scenarios.jsonl: trajectory + structured output)
+│   └── var/                     runtime data, gitignored: audit log, lab.db, payments.db, wallet.db
+├── frontend/                    Vite + React + TypeScript console (Astryx design system), nginx image
+├── infra/                       production: docker-compose.prod.yml, Caddyfile, .env.prod.example
+├── scripts/                     hash_password.py, send_test_webhook.py, smoke_prod.sh
+├── docs/                        architecture, threat model, demo, spec; adr/ (MADR decision records)
+├── compose.yaml                 local stack (API + UI)
+├── Makefile                     install, dev-api, dev-ui, test, lint, evals, build, up, prod-up, smoke
+└── .github/workflows/ci.yml     one job per component: backend, frontend
 ```
+
+The layout follows three references:
+
+- the [Full Stack FastAPI Template](https://github.com/fastapi/full-stack-fastapi-template)
+  (FastAPI's official template): a monorepo with `backend/` and `frontend/`, a root compose file,
+  and one CI job per component;
+- the [src layout](https://packaging.python.org/en/latest/discussions/src-layout-vs-flat-layout/)
+  of the Python Packaging User Guide (PyPA): one named, installed package,
+  `backend/src/regulated_agent_lab/`, so tests run against the installed package and not
+  whatever happens to be on the working directory;
+- [MADR](https://adr.github.io/madr/) for architecture decision records:
+  `docs/adr/NNNN-title.md`.

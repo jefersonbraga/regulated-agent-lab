@@ -15,8 +15,8 @@ claims or transfers.
 1. Start the API with the real parts on (on-prem model, live timetable, payment processor in
    test mode), then the UI:
    ```bash
-   uv run uvicorn api.server:app --env-file .env          # terminal 1
-   cd ui && npm run dev                                   # terminal 2, http://localhost:5173
+   cd backend && uv run uvicorn regulated_agent_lab.api.server:app --env-file ../.env   # terminal 1
+   cd frontend && npm run dev                             # terminal 2, http://localhost:5173
    ```
    The API log should say `Mode: timetable=live, payments=stripe_test` and no `LLM check`
    warning. `.env` holds `DEMO_USERS` (e.g. `alice`, and `bob` as approver) and
@@ -32,7 +32,7 @@ claims or transfers.
 3. Do one throwaway booking, so the model and the timetable are warm.
 
 **Fallback if the network or the GPU box is down:** start with
-`API_AUTH_DISABLED=1 LLM_PROVIDER=mock AGENT_TOKEN_SECRET=demo-only uv run uvicorn api.server:app`
+`cd backend && API_AUTH_DISABLED=1 LLM_PROVIDER=mock AGENT_TOKEN_SECRET=demo-only uv run uvicorn regulated_agent_lab.api.server:app`
 (no model, no network, no login). Everything below works except the live timetable and the
 processor (the simulated provider records a simulated capture, no wallet); say so.
 
@@ -130,10 +130,10 @@ the customer's, enforced by the wallet, not by the prompt." Set it back to 200 a
 - Click **Verify chain**: green, N entries.
 - Tamper with one payment line (keep the backup; do not book anything until it is restored):
   ```bash
-  cp var/audit.jsonl var/audit.jsonl.bak
+  cp backend/var/audit.jsonl backend/var/audit.jsonl.bak
   python3 - <<'PY'
   import json, pathlib
-  p = pathlib.Path("var/audit.jsonl"); lines = p.read_text().splitlines()
+  p = pathlib.Path("backend/var/audit.jsonl"); lines = p.read_text().splitlines()
   for i in range(len(lines) - 1, -1, -1):
       e = json.loads(lines[i])
       if e["event"] == "tool_result" and e["data"].get("tool") == "payments.charge":
@@ -145,7 +145,7 @@ the customer's, enforced by the wallet, not by the prompt." Set it back to 200 a
 - Click **Verify chain**: red, with the first broken block. **Say:** "Each entry hashes the one
   before it, and a head file anchors the end, so edits, deletions, reordering and truncation
   are all detected."
-- Restore: `mv var/audit.jsonl.bak var/audit.jsonl`, then **Verify chain** is green again.
+- Restore: `mv backend/var/audit.jsonl.bak backend/var/audit.jsonl`, then **Verify chain** is green again.
 
 ## Act 5: a restart does not lose a pending approval (45 s)
 
@@ -158,7 +158,7 @@ the customer's, enforced by the wallet, not by the prompt." Set it back to 200 a
 
 ## Close (15 s)
 
-- Live eval pass rate against the on-prem model: `uv run pytest -m live evals -q` (prints
+- Live eval pass rate against the on-prem model: `cd backend && uv run pytest -m live evals -q` (`make evals-live`) (prints
   `N/N scenarios passed against the live model`). The same scenarios run with a mock model in
   CI, asserting exact tool trajectories, never free text.
 - **Say:** "Model on-prem, PII redacted before it enters the graph, least privilege per agent,
