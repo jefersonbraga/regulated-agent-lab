@@ -26,7 +26,10 @@
 	header {
 		# "?" = only when the response does not already carry it (no duplicate HSTS).
 		?Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		# No software names: Caddy's own Server and the Via it adds to proxied responses. (Railway's
+		# edge still sends its own Server and x-railway-* headers; those are outside this service.)
 		-Server
+		-Via
 		defer
 	}
 
