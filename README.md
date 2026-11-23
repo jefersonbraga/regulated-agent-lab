@@ -43,8 +43,8 @@ evaluator on request.
 
 | What | Result |
 |---|---|
-| Unit, API and graph tests (Python) | 460 passing, no network, no keys |
-| UI tests (Vitest) | 224 passing |
+| Unit, API and graph tests (Python) | 461 passing, no network, no keys |
+| UI tests (Vitest) | 238 passing |
 | Scenario evals (normal, malicious, invalid) with exact tool trajectories | 18/18 with the mock model in CI; 18/18 against the on-prem model (2026-11-22) |
 | Production build under its Content Security Policy | zero violations in a browser run |
 
@@ -65,6 +65,13 @@ evaluator on request.
    processor fault is now reported as a technical failure, never as a policy refusal.
 5. **Times came back with a UTC offset** (`06:00+01:00`) and crashed the window comparison;
    windows are normalised to local wall-clock time.
+
+**And one in the live deployment:** model answers over ~1 KB never reached the cloud host, so
+return trips timed out while one-way trips worked: a path-MTU black hole on the tunnel to the
+on-prem model. The diagnosis and the fix (a smaller tunnel MTU, nothing changed on the model
+host) are in [infra/README.md](infra/README.md#railway-the-live-demo); the SSE keep-alive and the
+console's "still working" notice that came out of it are tested
+(`backend/tests/integration/test_api_stream.py`, `frontend/src/App.test.tsx`).
 
 ## What is real, what is simulated
 
@@ -339,11 +346,12 @@ authentication is on. The return from the processor's Checkout page needs no pub
 it lands on the UI (static files), which then calls the API with the session.
 
 **CSRF, CORS.** Every state-changing request (`POST`) must carry an `Origin` that is one of the
-allowed CORS origins (`http://localhost:5173`, `http://localhost:4173`, plus
-`API_EXTRA_CORS_ORIGINS`), else 403; this is defence in depth on top of `SameSite=Strict`.
-CORS allows credentials for exactly those origins, never `*`. The UI and the API must be on the
-same site (e.g. `app.example.org` and `api.example.org`) for the `SameSite=Strict` cookie to be
-sent.
+allowed CORS origins (`http://localhost:5173`, `http://localhost:4173`, the origin of
+`PUBLIC_APP_URL`, plus `API_EXTRA_CORS_ORIGINS`), else 403; this is defence in depth on top of
+`SameSite=Strict`. CORS allows credentials for exactly those origins, never `*`. The UI and the
+API must be on the same site for the `SameSite=Strict` cookie to be sent: one origin behind a
+reverse proxy (`/api/*` to the API, as both deploys in `infra/` do), or sibling subdomains such
+as `app.example.org` and `api.example.org`.
 
 **Who approves.** The approver recorded in the decision, the approval token and the audit is
 the signed-in user; any `approver` in the request body is ignored (the field stays for
@@ -358,6 +366,21 @@ proxy for that). Behind a reverse proxy, start uvicorn with `--proxy-headers
 The UI shows a sign-in screen when `GET /auth/me` answers 401, the signed-in user and a sign-out
 button in the header, and sends every request with `credentials: "include"`. The recorded demos
 (`?demo=…`, development builds) need no login.
+
+**The console follows the roles**, so a rule shows up as an explanation before a click, never
+as a 403 after it:
+
+- **Requester, with `REQUIRE_SEPARATE_APPROVER=1`:** the approval card says a second person must
+  decide and why (the four-eyes rule), and keeps Approve, Reject and the train choice locked.
+  The page re-reads the run every 4 s and shows the approver's decision when it lands.
+- **Approver:** the Human gate lists the quotes that wait for them (requested by someone else);
+  the tab title carries the count (`(1) Approval needed`), visible from a background tab; a
+  corner notice announces each new one once and never opens a quote by itself. The history
+  refreshes every 15 s.
+- **Approver-only account:** planning is locked with the reason, since only requesters create
+  runs.
+- **Slow model:** after 8 s without an event the stage says the run is still working, and that
+  it stops safely, with nothing booked or charged, if the model does not answer.
 
 ### Two payment models: hosted Checkout or the agent's wallet
 
@@ -583,8 +606,10 @@ Before the console is reachable from the internet:
 2. **Users and secret:** `DEMO_USERS` from `ral-hash-password` (strong passwords) and a
    random `SESSION_SECRET` (32+ characters). Never `API_AUTH_DISABLED=1`. Consider
    `REQUIRE_SEPARATE_APPROVER=1` with a requester and an approver account.
-3. **Origins:** `API_EXTRA_CORS_ORIGINS=https://<ui host>` (exact origin), and the UI built with
-   `VITE_API_URL=https://<api host>`; UI and API on the same site (same registrable domain).
+3. **Origins:** simplest is one origin, with a reverse proxy sending `/api/*` to the API and the
+   UI built with `VITE_API_URL=/api` (both deploys in `infra/`); `PUBLIC_APP_URL` then covers
+   CORS. With separate hosts, set `API_EXTRA_CORS_ORIGINS=https://<ui host>` (exact origin),
+   build the UI with `VITE_API_URL=https://<api host>`, and keep both on the same site.
 4. **`PUBLIC_APP_URL=https://<ui host>`**: where the processor sends the customer back.
 5. **Webhook endpoint** registered in the processor's test-mode dashboard at
    `https://<api host>/webhooks/stripe` for `checkout.session.completed`,
@@ -592,14 +617,17 @@ Before the console is reachable from the internet:
    `charge.refunded`, `charge.dispute.created`, and its signing secret in `STRIPE_WEBHOOK_SECRET`.
    Use a restricted `rk_test_` key (Checkout Sessions, PaymentIntents, and for the wallet
    Customers, SetupIntents and PaymentMethods) as `STRIPE_TEST_SECRET_KEY`.
-6. **LLM:** `LLM_PROVIDER=mock` or a cloud provider (`anthropic`, `openai` with its key): the
-   on-prem model on the LAN is not reachable from a public host, and must not be exposed.
+6. **LLM:** `LLM_PROVIDER=mock`, a cloud provider (`anthropic`, `openai` with its key), or the
+   on-prem model reached privately. Never expose the model endpoint itself: the live demo
+   reaches it over a tailnet, through a service with no public domain whose tailnet tag may
+   open only the model port ([infra/README.md](infra/README.md#railway-the-live-demo)).
 7. **Proxy:** uvicorn with `--proxy-headers --forwarded-allow-ips=<proxy ip>` so the login rate
    limit sees client IPs; one API process (the locks and rate limits are per process).
 8. Keep `backend/var/` on a private volume; it holds the audit log and the three databases.
 
-A ready-made single-domain HTTPS deploy (Caddy + compose, one free ARM VM) that does all of the
-above: [infra/README.md](infra/README.md) (`make prod-up`, then `make smoke DOMAIN=...`).
+Two ready-made single-domain HTTPS deploys that do all of the above, in
+[infra/README.md](infra/README.md): Caddy + compose on one free ARM VM (`make prod-up`, then
+`make smoke DOMAIN=...`), and the Railway setup the live demo runs on.
 
 ### Tests
 
@@ -640,6 +668,11 @@ no GPU, endpoint or secrets.
   scripts, which stay strict.
 - Checked in a browser against the production build: zero CSP violations through sign-in,
   planning, approval and theme switching.
+- **Live demo:** `scripts/smoke_prod.sh` passes for HTTPS, the headers on `/` and `/api/health`,
+  the 401/404/400 surface and the signed webhook; TLS 1.2 and 1.3 only; the session cookie is
+  `HttpOnly; Secure; SameSite=Strict`; a foreign `Origin` gets 403. The gateway drops `Server`
+  and `Via`; the one check it reports as failed is the `Server` header that Railway's edge adds
+  in front of every service, outside the deploy's control.
 
 ## Limitations and next steps
 
@@ -718,9 +751,10 @@ This is a lab, not a production system. Here is what it does not do:
   in-process (the agents still reach it only through the gate); the mandate is a limit per
   booking, not per period; a token refused for a mismatch is not burnt (it cannot be spent for
   anything but its bound amount, merchant and run anyway).
-- **Live-eval pass-rate: not published yet.** CI runs only the mock model. `pytest -m live`
-  measures the pass-rate against the real model, and the numbers will be added here once they
-  have been measured on the DGX.
+- **Live evals are run by hand.** CI runs only the mock model (no GPU, endpoint or secrets).
+  `pytest -m live` measures the pass-rate against the real model; the last run, 18/18 on the
+  on-prem model, is in [Evidence](#evidence). A model or prompt change needs a new run before
+  that number holds.
 
 ## Repository layout
 
@@ -738,7 +772,8 @@ This is a lab, not a production system. Here is what it does not do:
 │   ├── evals/                   scenario evals (scenarios.jsonl: trajectory + structured output)
 │   └── var/                     runtime data, gitignored: audit log, lab.db, payments.db, wallet.db
 ├── frontend/                    Vite + React + TypeScript console (Astryx design system), nginx image
-├── infra/                       production: docker-compose.prod.yml, Caddyfile, .env.prod.example
+├── infra/                       production: docker-compose.prod.yml, Caddyfile, .env.prod.example;
+│                                railway/ (gateway and model-link services of the live demo)
 ├── scripts/                     hash_password.py, send_test_webhook.py, smoke_prod.sh
 ├── docs/                        architecture, threat model, demo, spec; adr/ (MADR decision records)
 ├── compose.yaml                 local stack (API + UI)

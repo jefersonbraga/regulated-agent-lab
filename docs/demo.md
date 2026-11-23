@@ -10,6 +10,12 @@ human approves the exact quote; every step lands in a tamper-evident trail. Trai
 vehicle because everyone understands a ticket; the controls are what carries over to payments,
 claims or transfers.
 
+**On the live demo** (https://regulated-agent-lab.up.railway.app) nothing needs starting: skip
+"Before the call". There `REQUIRE_SEPARATE_APPROVER=1`, so use two accounts: request as the
+requester in one window, then approve as the approver in a private window, which lists the
+waiting quote in the Human gate and announces it in a corner notice. Every "approve" below is
+the approver's, and the requester's window shows the outcome a few seconds later.
+
 ## Before the call (10 minutes earlier)
 
 1. Start the API with the real parts on (on-prem model, live timetable, payment processor in
