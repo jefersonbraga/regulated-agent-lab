@@ -1,0 +1,31 @@
+WEBVTT
+
+00:00:00.000 --> 00:00:04.700
+An AI agent that books trains and pays for them, under financial-services controls.
+
+00:00:04.700 --> 00:00:08.000
+Left: the requester asks for a trip (real timetable, simulated fares).
+
+00:00:08.000 --> 00:00:17.900
+LLM proposes, code disposes: the model types the request, code does the rest.
+
+00:00:17.900 --> 00:00:24.300
+Quote ready. The requester cannot approve their own spend: the four-eyes rule.
+
+00:00:24.300 --> 00:00:27.800
+Right: the approver signs in. The waiting quote is announced, never opened for them.
+
+00:00:27.800 --> 00:00:33.200
+The approver reviews trains and quote hash, and lets the agent pay from the wallet.
+
+00:00:33.200 --> 00:00:38.600
+Approved: a single-use token for exactly this amount, merchant and run.
+
+00:00:38.600 --> 00:00:41.900
+Booked and confirmed by the processor, with the receipt and the quote hash.
+
+00:00:41.900 --> 00:00:45.600
+Seconds later the requester's window follows the decision on its own.
+
+00:00:45.600 --> 00:00:50.000
+Every step lands in a hash-chained audit trail, verified here.

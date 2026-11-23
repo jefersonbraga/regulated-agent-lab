@@ -13,7 +13,8 @@ way, are in [infra/README.md](infra/README.md#railway-the-live-demo).
 
 ![Four-eyes booking on the live demo: the requester cannot approve, the approver reviews the quote hash and the agent pays from the wallet](docs/media/demo.gif)
 
-**[Full walkthrough, 50 s, captioned (MP4)](docs/media/demo.mp4):** recorded on the live demo
+**[Full walkthrough, 50 s, captioned (MP4)](docs/media/demo.mp4)** (subtitles also as
+[SRT](docs/media/demo.en.srt) and [VTT](docs/media/demo.en.vtt)): recorded on the live demo
 with two accounts side by side. The requester asks for a return trip, the quote waits for a
 second person, the approver lets the agent pay from the wallet with a single-use token, the
 processor confirms, the requester's window follows, and the audit chain verifies.
