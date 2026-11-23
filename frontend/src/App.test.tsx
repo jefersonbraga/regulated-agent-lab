@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import App, { describeFailure, errorText, modeBadges } from "./App";
+import App, { approverNote, awaitingFor, describeFailure, errorText, modeBadges, requestNote } from "./App";
 import type { ApiClient } from "./api";
 import { demoClient, type DemoOptions } from "./demo";
 import { audit as fixtureAudit, cleanCompleted, QUOTE_HASH, QUOTE_HASHES, RECOMMENDED_FARE_IDS, RUN_ID } from "./fixtures/events";
@@ -33,6 +33,90 @@ const composer = () => screen.getByLabelText("Message input");
 /** Alerts with something to say: Astryx form fields keep empty live regions ready for entry errors. */
 const pageAlerts = () => screen.queryAllByRole("alert").filter((a) => a.textContent?.trim());
 const node = (name: RegExp) => within(screen.getByTestId("agent-stage")).getByRole("button", { name });
+
+describe("approverNote", () => {
+  const me = (name: string, role: "requester" | "approver" | "both", separate = true) => ({
+    name,
+    role,
+    auth_enabled: true,
+    require_separate_approver: separate,
+  });
+
+  it("asks for a second person when the viewer requested the run", () => {
+    const note = approverNote(me("jeff", "both"), "jeff");
+    expect(note).toMatch(/You requested this trip/);
+    // The rule says why, not only what: the four-eyes control and what it protects against.
+    expect(note).toMatch(/four-eyes rule/);
+    expect(note).toMatch(/cannot also authorize the spend/);
+  });
+
+  it("asks for an approver when the viewer may only request", () => {
+    expect(approverNote(me("recruiter", "requester"), "someone")).toMatch(/cannot approve/);
+  });
+
+  it("stays silent for an approver of someone else's run, or without the rule", () => {
+    expect(approverNote(me("jeff-approver", "approver"), "jeff")).toBeNull();
+    expect(approverNote(me("jeff", "both", false), "jeff")).toBeNull();
+    expect(approverNote(null, "jeff")).toBeNull();
+    expect(approverNote(me("jeff", "both"), null)).toBeNull();
+  });
+});
+
+describe("awaitingFor", () => {
+  const me = (name: string, role: "requester" | "approver" | "both") => ({
+    name,
+    role,
+    auth_enabled: true,
+    require_separate_approver: true,
+  });
+  const row = (run_id: string, status: RunSummary["status"], requester: string): RunSummary => ({
+    run_id,
+    created_at: "2026-11-23T15:00:00Z",
+    updated_at: "2026-11-23T15:00:00Z",
+    request_redacted: `trip ${run_id}`,
+    status,
+    total_cents: 8400,
+    currency: "CHF",
+    payment_id: null,
+    flags: [],
+    settlement: null,
+    requester,
+  });
+  const runs = [
+    row("a", "awaiting_approval", "jeff"),
+    row("b", "completed", "jeff"),
+    row("c", "awaiting_approval", "jeff-approver"),
+    row("d", "awaiting_approval", "recruiter"),
+  ];
+
+  it("lists the quotes an approver may decide: waiting, and requested by someone else", () => {
+    expect(awaitingFor(me("jeff-approver", "approver"), runs).map((r) => r.run_id)).toEqual(["a", "d"]);
+  });
+
+  it("lists nothing for a requester-only account or without a signed-in user", () => {
+    expect(awaitingFor(me("recruiter", "requester"), runs)).toEqual([]);
+    expect(awaitingFor(null, runs)).toEqual([]);
+  });
+});
+
+describe("requestNote", () => {
+  const me = (role: "requester" | "approver" | "both") => ({
+    name: "x",
+    role,
+    auth_enabled: true,
+    require_separate_approver: true,
+  });
+
+  it("locks planning for an approver-only account, and says why", () => {
+    expect(requestNote(me("approver"))).toMatch(/approves trips and cannot request them/);
+  });
+
+  it("leaves planning open for accounts that may request, and without sign-in", () => {
+    expect(requestNote(me("requester"))).toBeNull();
+    expect(requestNote(me("both"))).toBeNull();
+    expect(requestNote(null)).toBeNull();
+  });
+});
 
 describe("App", () => {
   it("starts idle, with the design rule on screen", () => {
@@ -141,6 +225,23 @@ describe("App", () => {
     expect(screen.getByText("Agents at work…")).toBeInTheDocument();
     expect(screen.getByTestId("audit-recording")).toBeInTheDocument();
     expect(composer()).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("says the run is still working when no event arrives for a while", async () => {
+    // A slow model call keeps the stream quiet (the API only sends keep-alive comments).
+    render(<App client={demoClient({ scenario: "clean", hold: 3 })} paceMs={0} quietNoticeMs={50} />);
+    await roundTrip();
+    const notice = await screen.findByTestId("run-quiet");
+    expect(notice).toHaveTextContent("Still working");
+    expect(notice).toHaveTextContent("nothing is booked or charged");
+    expect(screen.getByTestId("run-status")).toHaveTextContent("running");
+  });
+
+  it("shows no still-working notice while events keep arriving", async () => {
+    setup({ scenario: "clean" });
+    await roundTrip();
+    await screen.findByRole("region", { name: "Approval required" });
+    expect(screen.queryByTestId("run-quiet")).not.toBeInTheDocument();
   });
 
   it("shows the live step while agents work", async () => {

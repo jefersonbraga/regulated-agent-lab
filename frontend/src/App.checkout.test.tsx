@@ -4,9 +4,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import App, { parseCheckoutReturn } from "./App";
 import { ApiError, type ApiClient } from "./api";
 import { demoClient } from "./demo";
-import { cleanCompleted } from "./fixtures/events";
+import { cleanAwaiting, cleanCompleted } from "./fixtures/events";
 import { eventsFromView } from "./runGraph";
-import type { Me, RunEvent, RunView } from "./types";
+import type { Me, RunEvent, RunSummary, RunView } from "./types";
 
 const HEX_RUN = "0123456789abcdef0123456789abcdef";
 const RECEIPT = "https://pay.stripe.com/receipts/payment/test_1";
@@ -213,6 +213,90 @@ describe("sign-in", () => {
     await screen.findByTestId("nav-user");
     await roundTrip();
     expect(await screen.findByRole("region", { name: "Sign in" })).toBeInTheDocument();
+  });
+
+  it("follows a quote another person must decide, and shows their decision when it lands", async () => {
+    const requester: Me = { ...me, require_separate_approver: true };
+    let decided = false;
+    const getRun = vi.fn(async () => (decided ? cleanCompleted : cleanAwaiting));
+    const client = sessionClient({ getMe: vi.fn().mockResolvedValue(requester), getRun });
+    render(<App client={client} paceMs={0} decisionPollMs={20} />);
+    await screen.findByTestId("nav-user");
+    await roundTrip();
+    const card = await screen.findByRole("region", { name: "Approval required" });
+    expect(within(card).getByTestId("approver-note")).toHaveTextContent("You requested this trip");
+    // Still waiting: polling keeps the card. Then the approver decides elsewhere.
+    await waitFor(() => expect(getRun).toHaveBeenCalled());
+    expect(screen.getByRole("region", { name: "Approval required" })).toBeInTheDocument();
+    decided = true;
+    await waitFor(() => expect(screen.getByTestId("run-status")).toHaveTextContent("completed"));
+    expect(getRun).toHaveBeenCalledWith(cleanCompleted.run_id);
+    expect(screen.queryByRole("region", { name: "Approval required" })).not.toBeInTheDocument();
+  });
+
+  it("tells an approver that a quote waits for them, in the tab title and a corner notice", async () => {
+    const approver: Me = { name: "bob", role: "approver", auth_enabled: true, require_separate_approver: true };
+    const pending: RunSummary = {
+      run_id: cleanAwaiting.run_id,
+      created_at: "2026-11-23T15:00:00Z",
+      updated_at: "2026-11-23T15:00:00Z",
+      request_redacted: "Train from Zurich HB to Bern",
+      status: "awaiting_approval",
+      total_cents: 8400,
+      currency: "CHF",
+      payment_id: null,
+      flags: [],
+      settlement: null,
+      requester: "alice",
+    };
+    const getRun = vi.fn(async () => cleanAwaiting);
+    const client = sessionClient({
+      getMe: vi.fn().mockResolvedValue(approver),
+      listRuns: vi.fn().mockResolvedValue([pending]),
+      getRun,
+    });
+    render(<App client={client} paceMs={0} />);
+    const notice = await screen.findByTestId("approval-notice");
+    expect(notice).toHaveTextContent("alice requested a trip");
+    expect(notice).toHaveTextContent("CHF 84.00");
+    await waitFor(() => expect(document.title).toMatch(/^\(1\) Approval needed/));
+    // The notice opens nothing by itself: the approver chooses to review.
+    expect(screen.queryByRole("region", { name: "Approval required" })).not.toBeInTheDocument();
+    await userEvent.click(within(notice).getByRole("button", { name: "Review" }));
+    expect(getRun).toHaveBeenCalledWith(cleanAwaiting.run_id);
+    expect(await screen.findByRole("region", { name: "Approval required" })).toBeInTheDocument();
+    expect(screen.queryByTestId("approval-notice")).not.toBeInTheDocument();
+  });
+
+  it("lets an approver put the notice away, and does not show it again for the same trip", async () => {
+    const approver: Me = { name: "bob", role: "approver", auth_enabled: true, require_separate_approver: true };
+    const pending: RunSummary = {
+      run_id: cleanAwaiting.run_id,
+      created_at: "2026-11-23T15:00:00Z",
+      updated_at: "2026-11-23T15:00:00Z",
+      request_redacted: "Train from Zurich HB to Bern",
+      status: "awaiting_approval",
+      total_cents: 8400,
+      currency: "CHF",
+      payment_id: null,
+      flags: [],
+      settlement: null,
+      requester: "alice",
+    };
+    const listRuns = vi.fn().mockResolvedValue([pending]);
+    const client = sessionClient({
+      getMe: vi.fn().mockResolvedValue(approver),
+      listRuns,
+      getRun: vi.fn(async () => cleanAwaiting),
+    });
+    render(<App client={client} paceMs={0} />);
+    const notice = await screen.findByTestId("approval-notice");
+    // An approver-only account cannot request trips: the composer says so instead of a 403.
+    expect(screen.getByText(/approves trips and cannot request them/)).toBeInTheDocument();
+    await userEvent.click(within(notice).getByRole("button", { name: "Later" }));
+    expect(screen.queryByTestId("approval-notice")).not.toBeInTheDocument();
+    // The trip still waits in the Human gate.
+    expect(screen.getByTestId("gate-waiting")).toHaveTextContent("alice");
   });
 
   it("needs no sign-in for a recorded demo", async () => {

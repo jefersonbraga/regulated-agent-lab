@@ -125,6 +125,11 @@ EXTRA_ORIGINS_ENV = "API_EXTRA_CORS_ORIGINS"
 PUBLIC_APP_URL_ENV = "PUBLIC_APP_URL"
 
 SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+# Seconds without an event before the stream sends an SSE comment (": keep-alive"). A slow model
+# call (up to timeout_s x (1 + max_retries)) otherwise leaves the connection silent, and proxies
+# in front of the API may close it before the final event arrives. SSE parsers skip comments.
+SSE_KEEP_ALIVE_S = 15.0
+SSE_KEEP_ALIVE = ": keep-alive\n\n"
 STREAM_MODES = ["tasks", "custom"]
 # Tool events written by GatedToolClient (agents.tools.emit_run_event); anything else is dropped.
 TOOL_EVENT_TYPES = frozenset({"tool_call", "tool_result", "tool_error", "policy_denied"})
@@ -737,7 +742,14 @@ def create_app(
         task.add_done_callback(running.discard)
 
     async def _drain(queue: asyncio.Queue) -> AsyncIterator[str]:
-        while (event := await queue.get()) is not None:
+        while True:
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=SSE_KEEP_ALIVE_S)
+            except TimeoutError:
+                yield SSE_KEEP_ALIVE
+                continue
+            if event is None:
+                return
             yield _sse(event)
 
     @protected.post("/runs/stream")
@@ -1277,7 +1289,10 @@ _app: FastAPI | None = None
 
 
 def __getattr__(name: str) -> Any:
-    """Lazy ``app`` for ``uvicorn regulated_agent_lab.api.server:app``; importing the module has no side effects."""
+    """Lazy ``app`` for ``uvicorn regulated_agent_lab.api.server:app``.
+
+    Importing the module has no side effects.
+    """
     global _app
     if name == "app":
         if _app is None:

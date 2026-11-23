@@ -25,6 +25,19 @@ const FARE_IDS = RECOMMENDED_FARE_IDS;
 const FLAGS = ["injection_flagged:travel_search.search_trains", "injection_flagged:travel_search.search_trains"];
 
 describe("ApprovalCard", () => {
+  it("explains a required second approver and keeps both decisions locked", () => {
+    const onDecision = vi.fn();
+    render(<ApprovalCard quote={quote} onDecision={onDecision} approverNote="You requested this trip." />);
+    const note = screen.getByTestId("approver-note");
+    expect(note).toHaveTextContent("Waiting for a second person");
+    expect(note).toHaveTextContent("You requested this trip.");
+    expectLocked("Approve");
+    expectLocked("Reject");
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reject" }));
+    expect(onDecision).not.toHaveBeenCalled();
+  });
+
   it("shows each leg as a compact route and the total big", () => {
     render(<ApprovalCard quote={quote} onDecision={vi.fn()} />);
     const outbound = screen.getByRole("listitem", { name: "Outbound leg, Zurich HB → Bern" });

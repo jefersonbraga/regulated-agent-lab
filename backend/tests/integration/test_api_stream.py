@@ -114,6 +114,34 @@ async def test_run_stream_event_order_to_interrupt(client):
     assert {k: v for k, v in view.items() if k != "type"} == fetched
 
 
+class _SlowLLM(MockLLM):
+    """A model that thinks for a while before each answer (a busy on-prem endpoint)."""
+
+    async def extract(self, schema, system, user):
+        await asyncio.sleep(0.3)
+        return await super().extract(schema, system, user)
+
+
+async def test_stream_sends_keep_alive_while_the_model_is_slow(tmp_path, monkeypatch):
+    # A silent stream gets cut by proxies and leaves the console waiting: while no event is due,
+    # the API sends SSE comments, which every SSE parser (frontend/src/sse.ts too) skips.
+    monkeypatch.setattr("regulated_agent_lab.api.server.SSE_KEEP_ALIVE_S", 0.05)
+    audit = AuditLog(tmp_path / "audit.jsonl")
+    tools = GatedToolClient(make_clients(in_memory=True), ToolPolicy.from_yaml(), audit)
+    app = create_app(llm=_SlowLLM(FIXTURES), tools=tools, audit=audit, db_path=tmp_path / "lab.db")
+    async with serve(app) as c:
+        resp = await c.post("/runs/stream", json={"message": MESSAGE})
+
+    assert resp.status_code == 200, resp.text
+    blocks = [b for b in resp.text.split("\n\n") if b.strip()]
+    keep_alives = [b for b in blocks if b.startswith(":")]
+    assert keep_alives and all(b == ": keep-alive" for b in keep_alives)
+    events = _parse("\n\n".join(b for b in blocks if not b.startswith(":")))
+    assert events[0]["type"] == "run_started"
+    assert events[-1]["type"] == "run_view"
+    assert events[-1]["status"] == "awaiting_approval"
+
+
 async def test_approval_stream_completes_with_one_charge(client):
     view = (await _start(client))[-1]
 

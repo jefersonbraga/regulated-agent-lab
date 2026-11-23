@@ -1,0 +1,46 @@
+# Railway gateway: the only service with a public domain. Railway's edge terminates TLS and
+# forwards plain HTTP to $PORT; the api and ui services have no public domain and are reached
+# over the private network. Same routes as ../../Caddyfile, so the console and the API share
+# one origin (connect-src 'self', the SameSite=Strict session cookie is always sent).
+#   /api/*  -> api.railway.internal:8000 with the /api prefix stripped (/api/health -> /health)
+#   else    -> ui.railway.internal:8080 (nginx with the console's static files)
+{
+	admin off
+	auto_https off
+	servers {
+		# Railway's edge connects from 100.64.0.0/10 and overwrites X-Real-IP and X-Forwarded-For
+		# with the real client address (a client-sent value does not survive), so only the edge
+		# is trusted and X-Real-IP is the client IP. The API gets that one address (see below),
+		# which keeps its per-IP login rate limit on real, unspoofable IPs.
+		trusted_proxies static 100.64.0.0/10
+		client_ip_headers X-Real-IP
+	}
+}
+
+:{$PORT:8080} {
+	log {
+		output stdout
+		format json
+	}
+
+	header {
+		# "?" = only when the response does not already carry it (no duplicate HSTS).
+		?Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+		defer
+	}
+
+	handle_path /api/* {
+		reverse_proxy {$API_UPSTREAM:api.railway.internal:8000} {
+			# Server-sent events (POST /runs/stream, .../approval/stream): flush every write.
+			flush_interval -1
+			# One address only: uvicorn (FORWARDED_ALLOW_IPS=*, the API has no public domain) reads it.
+			header_up X-Forwarded-For {client_ip}
+		}
+	}
+
+	handle {
+		encode zstd gzip
+		reverse_proxy {$UI_UPSTREAM:ui.railway.internal:8080}
+	}
+}

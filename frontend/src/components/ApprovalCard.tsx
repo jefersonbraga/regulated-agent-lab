@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type Ref } from "react";
 import { ArrowDownRight, Lock, RotateCcw } from "lucide-react";
 import { Badge } from "@astryxdesign/core/Badge";
+import { Banner } from "@astryxdesign/core/Banner";
 import { Button } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
 import { CheckboxInput } from "@astryxdesign/core/CheckboxInput";
@@ -86,6 +87,12 @@ export interface ApprovalCardProps {
     paymentModel?: PaymentModel,
   ) => Promise<void> | void;
   disabled?: boolean;
+  /**
+   * Why the signed-in user cannot decide this quote (segregation of duties, or no approver role).
+   * When set, the card says so up front and both decisions stay locked: the server would refuse
+   * them with 403 anyway, and a raw error after the click reads like a fault.
+   */
+  approverNote?: string | null;
   /** The card's heading (focusable with tabIndex -1), so the page can move focus to the decision. */
   headingRef?: Ref<HTMLHeadingElement>;
   cardRef?: Ref<HTMLDivElement>;
@@ -468,10 +475,12 @@ export function ApprovalCard({
   request,
   onRequestNew,
   onDecision,
-  disabled = false,
+  disabled: disabledProp = false,
+  approverNote = null,
   headingRef,
   cardRef,
 }: ApprovalCardProps) {
+  const disabled = disabledProp || !!approverNote;
   // Which decision is in flight, if any: that button shows a spinner, the other is disabled.
   const [inFlight, setInFlight] = useState<boolean | null>(null);
   // Ref guards against a double click landing before React re-renders the disabled state.
@@ -571,6 +580,14 @@ export function ApprovalCard({
           </Text>
         )}
 
+        {approverNote && (
+          <Banner
+            status="info"
+            data-testid="approver-note"
+            title="Waiting for a second person"
+            description={approverNote}
+          />
+        )}
         {flagged && <FlagsBanner flags={flags} phase="review" />}
         {flagged && <FlaggedEvidence entries={flaggedEntries} onShow={onShowFlagged} />}
 

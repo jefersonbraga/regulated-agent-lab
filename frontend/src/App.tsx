@@ -126,6 +126,57 @@ export function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/** Why a second person decides: shown to the requester who waits and to the approver who decides. */
+export const FOUR_EYES =
+  "This is the four-eyes rule (segregation of duties): whoever asks the agent to spend money " +
+  "cannot also authorize the spend, so a hijacked account or a manipulated agent cannot pay on its own.";
+
+/**
+ * Why `viewer` cannot decide a quote of a run requested by `requester`, or null when they can.
+ * Mirrors the API's checks (approver role, REQUIRE_SEPARATE_APPROVER) so the card can explain
+ * the rule before a click instead of showing the server's 403 after it.
+ */
+export function approverNote(viewer: Me | null, requester: string | null | undefined): string | null {
+  if (!viewer || !viewer.auth_enabled) return null;
+  if (viewer.role === "requester") {
+    return (
+      "Your account can request trips but cannot approve them. Sign in as an approver, for " +
+      "example in a private window, to approve or reject this quote. It waits here until then."
+    );
+  }
+  if (viewer.require_separate_approver && requester && requester === viewer.name) {
+    return (
+      "You requested this trip, so a second person must approve it. " +
+      FOUR_EYES +
+      " Sign in as the approver, for example in a private window: this quote waits for them, " +
+      "and nothing is charged until they decide."
+    );
+  }
+  return null;
+}
+
+/**
+ * Why `viewer` cannot request trips (an approver-only account), or null when they can. Mirrors
+ * the API's requester-role check so planning is locked with a reason instead of a 403 on send.
+ */
+export function requestNote(viewer: Me | null): string | null {
+  if (!viewer || !viewer.auth_enabled || viewer.role !== "approver") return null;
+  return "This account approves trips and cannot request them. Sign in as a requester to plan one.";
+}
+
+/**
+ * The runs in `runs` whose quote `viewer` may decide now: waiting for approval and allowed by
+ * the same rules as approverNote. An approver did not start these runs, so the page lists them
+ * in the Human gate instead of leaving them to be found in the run history.
+ */
+export function awaitingFor(viewer: Me | null, runs: RunSummary[]): RunSummary[] {
+  if (!viewer) return [];
+  return runs.filter((r) => r.status === "awaiting_approval" && approverNote(viewer, r.requester) === null);
+}
+
+/** How often the run history refreshes while the page is idle, so new requests show up. */
+const RECENT_REFRESH_MS = 15000;
+
 /** Stream error types the server sends, in words a reader can act on. */
 const KNOWN_FAILURES: Record<string, string> = {
   McpTransportError: "Lost connection to the travel tools",
@@ -215,7 +266,25 @@ export interface AppProps {
   demoLabel?: string;
   /** Sends the browser to the processor's hosted card form (tests replace it). */
   navigate?: (url: string) => void;
+  /** Quiet time (ms) after which a running run says it is still working (tests shorten it). */
+  quietNoticeMs?: number;
+  /** How often (ms) a quote another person must decide is re-read (tests shorten it). */
+  decisionPollMs?: number;
 }
+
+/**
+ * While the quote on screen waits for someone else (segregation of duties), the page re-reads
+ * the run this often, so the requester sees the decision without reloading. Plain polling of
+ * GET /runs/{id}: the decision is rare and a few seconds late is fine.
+ */
+export const DECISION_POLL_MS = 4000;
+
+/**
+ * Default quiet time before the "still working" notice. Tool steps send events within a second
+ * or two; a longer silence is the language model thinking (on-prem it can take up to its
+ * timeout, about a minute, plus one retry), and without a word the page looks frozen.
+ */
+export const QUIET_NOTICE_MS = 8000;
 
 function goTo(url: string) {
   window.location.assign(url);
@@ -302,6 +371,8 @@ function Console({
   onSignOut,
   onUnauthorized,
   navigate = goTo,
+  quietNoticeMs = QUIET_NOTICE_MS,
+  decisionPollMs = DECISION_POLL_MS,
 }: ConsoleProps) {
   const [graph, dispatch] = useReducer(reduceGraph, undefined, initialGraph);
   const [run, setRun] = useState<RunView | null>(null);
@@ -427,9 +498,20 @@ function Console({
 
   // The run the stream last announced, so a failed stream can still load its audit trail.
   const runIdRef = useRef<string | null>(null);
+  // When the last run event arrived, and whether the run has been quiet for too long.
+  const lastEventAt = useRef(0);
+  const [quiet, setQuiet] = useState(false);
+  // Runs this page created (run_started only comes from POST /runs/stream): their requester is
+  // the signed-in user, before the run history lists them.
+  const startedHere = useRef(new Set<string>());
   const apply = useCallback((e: RunEvent) => {
+    lastEventAt.current = Date.now();
+    setQuiet(false);
     dispatch(e);
-    if (e.type === "run_started") runIdRef.current = e.run_id;
+    if (e.type === "run_started") {
+      runIdRef.current = e.run_id;
+      startedHere.current.add(e.run_id);
+    }
     if (e.type === "run_view") {
       const { type: _type, ...view } = e;
       setRun(view);
@@ -459,6 +541,34 @@ function Console({
     void refreshRecent();
   }, [refreshRecent]);
 
+  // A signed-in user (an approver waiting for requests, in particular) sees new runs without
+  // reloading; never while a stream is open.
+  useEffect(() => {
+    if (!user || busy) return;
+    const id = setInterval(() => void refreshRecent(), RECENT_REFRESH_MS);
+    return () => clearInterval(id);
+  }, [user, busy, refreshRecent]);
+  const waiting = awaitingFor(user, recent);
+
+  // The approver is usually in another window: the tab title carries the count of quotes that
+  // wait for them, visible from any tab. Restored when nothing waits or on unmount.
+  const baseTitle = useRef(document.title);
+  useEffect(() => {
+    const base = baseTitle.current;
+    const flag = `(${waiting.length}) Approval needed`;
+    document.title = waiting.length > 0 ? (base ? `${flag} · ${base}` : flag) : base;
+    return () => {
+      document.title = base;
+    };
+  }, [waiting.length]);
+
+  // A corner notice for quotes that started waiting for this approver, once per trip and page.
+  // It never opens a quote by itself (the human chooses), and it waits while a stream runs or
+  // another quote is open, so it does not cut into a decision.
+  const announced = useRef(new Set<string>());
+  const [notice, setNotice] = useState<RunSummary[]>([]);
+  const waitingIds = waiting.map((r) => r.run_id).join(",");
+
   const runVerify = useCallback(async () => {
     try {
       setVerify(await client.verifyAudit());
@@ -472,6 +582,23 @@ function Console({
     busyRef.current = on;
     setBusy(on);
   }
+
+  // While a stream is open, a long gap between events gets a "still working" notice; the next
+  // event (or the end of the stream) clears it.
+  useEffect(() => {
+    if (!busy) {
+      setQuiet(false);
+      return;
+    }
+    lastEventAt.current = Date.now();
+    const id = setInterval(
+      () => {
+        if (Date.now() - lastEventAt.current >= quietNoticeMs) setQuiet(true);
+      },
+      Math.max(10, Math.min(1000, quietNoticeMs / 2)),
+    );
+    return () => clearInterval(id);
+  }, [busy, quietNoticeMs]);
 
   async function handleSend(text: string) {
     if (busyRef.current) return;
@@ -681,6 +808,55 @@ function Console({
   }, [pollRunId, client, refreshAudit, refreshRecent]);
 
   const pendingQuote = run?.status === "awaiting_approval" ? (run.interrupt?.quote ?? run.quote) : null;
+  // Why the signed-in user cannot decide the quote on screen (someone else must), if so.
+  const decisionNote =
+    pendingQuote && run
+      ? approverNote(
+          user,
+          recent.find((r) => r.run_id === run.run_id)?.requester ??
+            (startedHere.current.has(run.run_id) ? user?.name : null),
+        )
+      : null;
+
+  const quoteOpen = pendingQuote !== null;
+  useEffect(() => {
+    if (busy || quoteOpen) return;
+    const fresh = waiting.filter((r) => !announced.current.has(r.run_id));
+    if (fresh.length === 0) return;
+    for (const r of fresh) announced.current.add(r.run_id);
+    setNotice(fresh);
+    // Keyed on the ids (waitingIds), not on the array, which is new on every render.
+  }, [waitingIds, busy, quoteOpen]);
+  // Trips decided meanwhile (elsewhere, or opened from the gate) leave the notice.
+  const noticeRuns = notice.filter((r) => waiting.some((w) => w.run_id === r.run_id));
+  const showNotice = noticeRuns.length > 0 && !busy && !quoteOpen;
+
+  // That quote is decided in another session: re-read the run until its status moves on, then
+  // replay the steps after it (approval, booking, payment) like any resumed run.
+  const waitingRunId = decisionNote && run ? run.run_id : null;
+  useEffect(() => {
+    if (!waitingRunId || !client.getRun) return;
+    const getRun = client.getRun;
+    let stopped = false;
+    const id = setInterval(async () => {
+      const current = runRef.current;
+      if (stopped || busyRef.current || !current || current.run_id !== waitingRunId) return;
+      try {
+        const view = await getRun(waitingRunId);
+        if (stopped || view.status === current.status) return;
+        for (const e of eventsFromView(view, current)) apply(e);
+        await refreshAudit(view.run_id);
+        if (isTerminal(view.status)) await runVerify();
+        void refreshRecent();
+      } catch {
+        /* a missed poll is retried on the next tick; never an alert */
+      }
+    }, decisionPollMs);
+    return () => {
+      stopped = true;
+      clearInterval(id);
+    };
+  }, [waitingRunId, client, decisionPollMs, apply, refreshAudit, runVerify, refreshRecent]);
   // A stream that failed before its final view still ends the run on screen.
   const failedRun: RunView | null =
     !run && !busy && graph.runId && graph.error
@@ -800,7 +976,11 @@ function Console({
           />
         )}
         <div className="area-command">
-          <CommandBar onSend={(t) => void handleSend(t)} busy={busy} lockedHint={pendingQuote ? DECIDE_FIRST : undefined} />
+          <CommandBar
+            onSend={(t) => void handleSend(t)}
+            busy={busy}
+            lockedHint={pendingQuote ? DECIDE_FIRST : (requestNote(user) ?? undefined)}
+          />
         </div>
 
         <section className="area-stage" aria-label="Run">
@@ -835,6 +1015,19 @@ function Console({
               </Text>
             )}
           </div>
+          {quiet && busy && !pendingQuote && (
+            <Banner
+              status="info"
+              data-testid="run-quiet"
+              className="quiet-banner"
+              title="Still working"
+              description={
+                `${live ? NODE_SPECS[live].label : "The run"} is waiting for the language model, which can take ` +
+                "up to two minutes. The run is not stuck: it continues on its own, and if the model does " +
+                "not answer in time it stops safely, and nothing is booked or charged."
+              }
+            />
+          )}
           {/* The approval card carries its own banner while a quote waits. */}
           {bannerFlags.length > 0 && !pendingQuote && (
             <FlagsBanner flags={bannerFlags} phase={flagsPhase} reason={denyReason} />
@@ -880,8 +1073,9 @@ function Console({
               flaggedEntries={flaggedEntries}
               onShowFlagged={flaggedEntries.length > 0 ? () => focusAuditBlock(flaggedEntries[0].seq) : undefined}
               request={request}
-              onRequestNew={request && !busy ? () => void handleSend(request) : undefined}
+              onRequestNew={request && !busy && !requestNote(user) ? () => void handleSend(request) : undefined}
               onDecision={handleDecision}
+              approverNote={decisionNote}
               headingRef={approvalHeading}
               cardRef={setApprovalCard}
             />
@@ -915,7 +1109,7 @@ function Console({
                   : undefined
               }
               onRetry={
-                (ended.status === "failed" || ended.status === "refused") && request && !busy
+                (ended.status === "failed" || ended.status === "refused") && request && !busy && !requestNote(user)
                   ? () => void handleSend(request)
                   : undefined
               }
@@ -929,8 +1123,34 @@ function Console({
                   <Heading level={2}>Human gate</Heading>
                 </div>
                 <Text color="secondary" as="p">
-                  {busy ? "Agents at work…" : "Nothing to approve."}
+                  {busy
+                    ? "Agents at work…"
+                    : waiting.length > 0
+                      ? `${waiting.length} ${waiting.length === 1 ? "trip is" : "trips are"} waiting for your approval.`
+                      : "Nothing to approve."}
                 </Text>
+                {!busy && waiting.length > 0 && user?.require_separate_approver && (
+                  <Text type="supporting" color="secondary" as="p" data-testid="gate-why">
+                    Someone else requested these trips; you are the second person who decides. {FOUR_EYES}
+                  </Text>
+                )}
+                {!busy && waiting.length > 0 && client.getRun && (
+                  <ul className="gate-waiting" data-testid="gate-waiting">
+                    {waiting.slice(0, 5).map((r) => (
+                      <li key={r.run_id}>
+                        <Button
+                          label={`Review ${r.total_cents != null ? formatCents(r.total_cents, r.currency ?? "CHF") : "quote"}`}
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => void handleOpenRun(r.run_id)}
+                        />
+                        <Text type="supporting" color="secondary" size="sm" className="gate-waiting-line">
+                          {r.requester ?? "someone"} · {r.request_redacted}
+                        </Text>
+                      </li>
+                    ))}
+                  </ul>
+                )}
                 <Text type="supporting" color="secondary" as="p">
                   {busy
                     ? "The quote lands here for your decision. Nothing is charged until you approve it."
@@ -977,6 +1197,44 @@ function Console({
             total={formatCents(pendingQuote.total_cents, pendingQuote.currency)}
             onReview={() => reveal(approvalHeading.current)}
           />
+        )}
+        {showNotice && (
+          <div className="approval-notice" role="status" aria-live="polite">
+            <Banner
+              status="info"
+              data-testid="approval-notice"
+              title={
+                noticeRuns.length === 1
+                  ? `${noticeRuns[0].requester ?? "Someone"} requested a trip`
+                  : `${noticeRuns.length} trips wait for your approval`
+              }
+              description={
+                noticeRuns.length === 1
+                  ? `${noticeRuns[0].request_redacted}${
+                      noticeRuns[0].total_cents != null
+                        ? ` · ${formatCents(noticeRuns[0].total_cents, noticeRuns[0].currency ?? "CHF")}`
+                        : ""
+                    }. It waits for your decision.`
+                  : "They are listed in the Human gate."
+              }
+              endContent={
+                <span className="approval-notice-actions">
+                  {client.getRun && (
+                    <Button
+                      label="Review"
+                      variant="primary"
+                      size="sm"
+                      onClick={() => {
+                        setNotice([]);
+                        void handleOpenRun(noticeRuns[0].run_id);
+                      }}
+                    />
+                  )}
+                  <Button label="Later" variant="secondary" size="sm" onClick={() => setNotice([])} />
+                </span>
+              }
+            />
+          </div>
         )}
       </div>
     </AppShell>

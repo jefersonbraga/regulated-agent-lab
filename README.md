@@ -7,6 +7,10 @@ payments go through a real processor in test mode, and every step lands in an au
 can verify. Trains are the vehicle because everyone understands a ticket; the controls carry
 over to payments, claims or transfers.
 
+**Live demo:** https://regulated-agent-lab.up.railway.app (accounts on request). The model runs
+on-prem and is reached over a tailnet; how it is deployed, and a path-MTU incident found on the
+way, are in [infra/README.md](infra/README.md#railway-the-live-demo).
+
 ![Sign-in screen of the agent console](docs/img/sign-in.jpg)
 
 ## In 30 seconds

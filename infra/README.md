@@ -232,21 +232,82 @@ idle reclamation of Always Free resources, and you still pay nothing within the 
 (set a budget alert anyway). Keep backups either way. A reclaimed instance can be started
 again, and the reserved IP and boot volume stay.
 
-## Railway alternative
+## Railway (the live demo)
 
-The same images run on Railway, but some things change:
+The public demo runs on Railway with the same `api` and `ui` images, plus two small services
+from [`railway/`](railway/). The model stays on-prem: the `api` reaches the vLLM host over a
+tailnet, through a service that holds the tailnet key so the API never does.
 
-- **No compose file, no Caddy**: each of `api` and `ui` is its own service (Dockerfile builds),
-  and Railway terminates TLS. To keep one origin, either run Caddy as a third service with the
-  public domain (an HTTP-only site on `:{$PORT}`, the same routes), or use a custom domain with
-  `app.` and `api.` subdomains (same registrable domain, needed for the `SameSite=Strict`
-  cookie). In that case build the UI with `VITE_API_URL=https://api.<domain>` and set
-  `API_EXTRA_CORS_ORIGINS=https://app.<domain>`. Two `*.up.railway.app` hosts are different
-  sites, so the cookie would not be sent between them.
-- **Volumes**: one Railway volume attached to the API service, mounted at `/app/var`, instead
-  of the named volume. Back it up from the Railway UI or with a one-off copy.
-- **Client IPs**: the proxy in front is Railway's, so `--forwarded-allow-ips` must trust that
-  proxy, not a fixed Caddy address.
-- **Cost**: there is no always-free tier. The Hobby plan is a monthly subscription that
-  includes some usage, then usage-based billing. The Oracle VM costs nothing within the Always
-  Free limits.
+```
+Internet ──HTTPS──> Railway edge ──> gateway (Caddy, the only public service)
+                                        ├─ /api/*  ──> api:8000  (volume /app/var)
+                                        └─ else    ──> ui:8080
+api ──private network──> model-link:8000 ──tailnet (tag:railway)──> vLLM host :8000
+```
+
+| Service | Source | Public | Notes |
+|---|---|---|---|
+| `gateway` | `infra/railway/gateway` | yes (`*.up.railway.app`) | Caddy on `$PORT`, plain HTTP (Railway terminates TLS); same routes as `Caddyfile` above, so UI and API share one origin |
+| `api` | `backend/` | no | volume at `/app/var`; `RAILWAY_RUN_UID=0` so the process can write the volume |
+| `ui` | `frontend/` | no | build variable `VITE_API_URL=/api` |
+| `model-link` | `infra/railway/model-link` | no | tailscaled in userspace mode + socat: `:8000` → `MODEL_TARGET` |
+
+**Deploy.** Each service is uploaded from its own directory (`--path-as-root`). Upload a copy
+holding only the files git tracks, so `.venv`, `node_modules`, `.env` and `backend/var/` never
+leave the machine:
+
+```bash
+railway up <copy-of-backend>  --path-as-root -s api
+railway up <copy-of-frontend> --path-as-root -s ui
+railway up infra/railway/gateway    --path-as-root -s gateway
+railway up infra/railway/model-link --path-as-root -s model-link
+```
+
+**API variables** (secrets set with `railway variable set NAME --stdin`, never on the command
+line): `SESSION_SECRET`, `AGENT_TOKEN_SECRET`, `DEMO_USERS`, `STRIPE_TEST_SECRET_KEY`,
+`STRIPE_WEBHOOK_SECRET`, `VLLM_API_KEY`; plus `PUBLIC_APP_URL=https://<gateway domain>`,
+`COOKIE_SECURE=1`, `API_AUTH_DISABLED=0`, `REQUIRE_SEPARATE_APPROVER=1`, `LLM_PROVIDER=vllm`,
+`VLLM_BASE_URL=http://model-link.railway.internal:8000/v1`, `TRAVEL_SEARCH_SOURCE=live`,
+`PAYMENTS_PROVIDER=stripe_test`, `FORWARDED_ALLOW_IPS=*` (the API has no public domain; only
+the gateway reaches it). The Stripe webhook points at `https://<gateway domain>/api/webhooks/stripe`.
+
+**Client IPs.** Railway's edge connects from `100.64.0.0/10` and overwrites `X-Real-IP` and
+`X-Forwarded-For` with the client address (a value the client sends does not survive). The
+gateway trusts only that range, takes the client IP from `X-Real-IP` and sends the API exactly
+one address, so the per-IP login rate limit sees real, unspoofable IPs.
+
+**Tailnet access.** The model-link node joins with a reusable, ephemeral auth key tagged
+`tag:railway`. The policy lets that tag reach the vLLM port and nothing else, and no rule has it
+as a destination:
+
+```jsonc
+"tagOwners": { "tag:railway": ["autogroup:admin"] },
+{ "action": "accept", "src": ["tag:railway"], "dst": ["<vllm-host>:8000"] }
+```
+
+An untagged key joins as the key owner's device and gets that user's access, so check the tag
+in the admin console after the first deploy.
+
+**Incident: model answers over ~1 KB never arrived (path MTU black hole).** Runs failed with
+`LLMUnavailable` after 2 x 60 s, but only for some requests: one-way trips worked, return trips
+always failed. The same call from a laptop on the tailnet answered in 2.6 s, with identical
+prompt, schema and library versions, so the model and the code were ruled out. Requests of
+21 KB went through the tunnel; responses did not: up to ~950 bytes arrived, from ~1.4 KB on
+nothing did. A return trip's intent is ~1.3 KB, the first answer to need a full-size packet.
+Packets of ~1.36 KB on the wire (WireGuard over UDP) from the home network to Railway were
+dropped without an ICMP "too big", so TCP never shrank them. Fix: `TS_DEBUG_MTU=1200` in the
+model-link image. Its netstack then advertises a smaller MSS, and the model host sends segments
+that fit. Nothing changed on the model host. Two follow-ups came out of it: the API now sends an
+SSE keep-alive every 15 s while a step is quiet (a silent stream can be cut by proxies), and the
+console shows a "still working" notice after 8 s without events.
+
+**Keep the path warm.** After a few idle minutes tailscaled drops the peer from its WireGuard
+config, and the first request must re-establish the path. The model-link opens a TCP connection
+to the model every 30 s (`KEEP_WARM_S`) so that first request does not pay for it.
+
+**Reset the demo data** (runs, audit log, payments ledger, wallet): delete the files under
+`/app/var` with `railway ssh -s api`, then `railway redeploy -s api`. The audit chain restarts
+and verifies.
+
+**Cost.** Railway has no always-free tier (Hobby is a monthly subscription with included usage,
+then usage-based). The Oracle VM above costs nothing within the Always Free limits.
