@@ -1882,6 +1882,41 @@
   background: rgba(14, 165, 233, 0.16);
   border: 1px solid rgba(125, 211, 252, 0.35);
 }
+.login-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 1rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #d8f3ff;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.login-source:hover,
+.login-source:focus-visible {
+  color: #ffffff;
+}
+.nav-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  color: var(--color-text-secondary, inherit);
+  text-decoration: none;
+}
+.nav-source:hover,
+.nav-source:focus-visible {
+  color: var(--color-text-primary, inherit);
+  background: var(--color-background-hover, rgba(127, 127, 127, 0.12));
+}
+@media (max-width: 640px) {
+  .nav-source-label {
+    display: none;
+  }
+}
 .login-panel {
   display: grid;
   place-items: center;

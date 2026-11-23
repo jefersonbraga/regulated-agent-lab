@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { LogOut, Moon, Sun, Wallet, Workflow } from "lucide-react";
+import { CodeXml, LogOut, Moon, Sun, Wallet, Workflow } from "lucide-react";
+import { SOURCE_URL } from "./links";
 import { AppShell } from "@astryxdesign/core/AppShell";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Banner } from "@astryxdesign/core/Banner";
@@ -920,6 +921,20 @@ function Console({
           endContent={
             <span className="nav-end">
               <Signals run={run} verify={verify} status={status} />
+              {SOURCE_URL && (
+                <a
+                  className="nav-source"
+                  href={SOURCE_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label="Source code on GitHub"
+                  title="Source code on GitHub"
+                  data-testid="nav-source"
+                >
+                  <CodeXml size="1em" aria-hidden="true" />
+                  <span className="nav-source-label">Source</span>
+                </a>
+              )}
               {wallet && (
                 <IconButton
                   label="Payment method"

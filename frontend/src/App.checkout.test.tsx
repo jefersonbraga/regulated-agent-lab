@@ -5,6 +5,7 @@ import App, { parseCheckoutReturn } from "./App";
 import { ApiError, type ApiClient } from "./api";
 import { demoClient } from "./demo";
 import { cleanAwaiting, cleanCompleted } from "./fixtures/events";
+import { SOURCE_URL } from "./links";
 import { eventsFromView } from "./runGraph";
 import type { Me, RunEvent, RunSummary, RunView } from "./types";
 
@@ -297,6 +298,22 @@ describe("sign-in", () => {
     expect(screen.queryByTestId("approval-notice")).not.toBeInTheDocument();
     // The trip still waits in the Human gate.
     expect(screen.getByTestId("gate-waiting")).toHaveTextContent("alice");
+  });
+
+  it("links the source code before sign-in and in the console header", async () => {
+    const client = sessionClient();
+    render(<App client={client} paceMs={0} />);
+    await screen.findByRole("region", { name: "Sign in" });
+    const before = screen.getByRole("link", { name: /source code/i });
+    expect(before).toHaveAttribute("href", SOURCE_URL);
+    expect(before).toHaveAttribute("rel", expect.stringContaining("noopener"));
+
+    const form = screen.getByRole("region", { name: "Sign in" });
+    await userEvent.type(within(form).getByLabelText(/^Name/), "alice");
+    await userEvent.type(within(form).getByLabelText(/^Password/), "secret");
+    await userEvent.click(within(form).getByRole("button", { name: "Sign in" }));
+    await screen.findByTestId("nav-user");
+    expect(screen.getByRole("link", { name: /source code/i })).toHaveAttribute("href", SOURCE_URL);
   });
 
   it("needs no sign-in for a recorded demo", async () => {

@@ -5,7 +5,8 @@ import { Card } from "@astryxdesign/core/Card";
 import { Heading } from "@astryxdesign/core/Heading";
 import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
-import { Fingerprint, Link2, ShieldCheck, Sparkles, UserCheck, Workflow } from "lucide-react";
+import { CodeXml, Fingerprint, Link2, ShieldCheck, Sparkles, UserCheck, Workflow } from "lucide-react";
+import { SOURCE_URL } from "../links";
 import { ApiError } from "../api";
 import heroUrl from "../assets/login-hero.jpg";
 
@@ -95,6 +96,12 @@ export function LoginScreen({ onLogin }: LoginScreenProps) {
               <li key={r}>{r}</li>
             ))}
           </ul>
+          {SOURCE_URL && (
+            <a className="login-source" href={SOURCE_URL} target="_blank" rel="noopener noreferrer">
+              <CodeXml size="1em" aria-hidden="true" />
+              Read the source code on GitHub
+            </a>
+          )}
         </div>
       </section>
 
