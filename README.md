@@ -11,6 +11,13 @@ over to payments, claims or transfers.
 on-prem and is reached over a tailnet; how it is deployed, and a path-MTU incident found on the
 way, are in [infra/README.md](infra/README.md#railway-the-live-demo).
 
+![Four-eyes booking on the live demo: the requester cannot approve, the approver reviews the quote hash and the agent pays from the wallet](docs/media/demo.gif)
+
+**[Full walkthrough, 50 s, captioned (MP4)](docs/media/demo.mp4):** recorded on the live demo
+with two accounts side by side. The requester asks for a return trip, the quote waits for a
+second person, the approver lets the agent pay from the wallet with a single-use token, the
+processor confirms, the requester's window follows, and the audit chain verifies.
+
 ![Sign-in screen of the agent console](docs/img/sign-in.jpg)
 
 ## In 30 seconds

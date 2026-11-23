@@ -502,12 +502,19 @@ function Console({
   // When the last run event arrived, and whether the run has been quiet for too long.
   const lastEventAt = useRef(0);
   const [quiet, setQuiet] = useState(false);
+  // Mirrors `quiet`, so the timer and every event update state only when it actually changes.
+  const quietRef = useRef(false);
+  const markQuiet = useCallback((on: boolean) => {
+    if (quietRef.current === on) return;
+    quietRef.current = on;
+    setQuiet(on);
+  }, []);
   // Runs this page created (run_started only comes from POST /runs/stream): their requester is
   // the signed-in user, before the run history lists them.
   const startedHere = useRef(new Set<string>());
   const apply = useCallback((e: RunEvent) => {
     lastEventAt.current = Date.now();
-    setQuiet(false);
+    markQuiet(false);
     dispatch(e);
     if (e.type === "run_started") {
       runIdRef.current = e.run_id;
@@ -588,18 +595,18 @@ function Console({
   // event (or the end of the stream) clears it.
   useEffect(() => {
     if (!busy) {
-      setQuiet(false);
+      markQuiet(false);
       return;
     }
     lastEventAt.current = Date.now();
     const id = setInterval(
       () => {
-        if (Date.now() - lastEventAt.current >= quietNoticeMs) setQuiet(true);
+        if (Date.now() - lastEventAt.current >= quietNoticeMs) markQuiet(true);
       },
       Math.max(10, Math.min(1000, quietNoticeMs / 2)),
     );
     return () => clearInterval(id);
-  }, [busy, quietNoticeMs]);
+  }, [busy, quietNoticeMs, markQuiet]);
 
   async function handleSend(text: string) {
     if (busyRef.current) return;
@@ -832,9 +839,16 @@ function Console({
   const noticeRuns = notice.filter((r) => waiting.some((w) => w.run_id === r.run_id));
   const showNotice = noticeRuns.length > 0 && !busy && !quoteOpen;
 
-  // That quote is decided in another session: re-read the run until its status moves on, then
-  // replay the steps after it (approval, booking, payment) like any resumed run.
-  const waitingRunId = decisionNote && run ? run.run_id : null;
+  // That quote is decided in another session: re-read the run and replay each new step
+  // (approval, booking, payment) like any resumed run. Following starts when the page shows the
+  // quote it cannot decide and lasts until the run is terminal: after the decision the run passes
+  // through "running" while it books and pays, and stopping there would freeze the page mid-way.
+  const [followedRunId, setFollowedRunId] = useState<string | null>(null);
+  useEffect(() => {
+    if (decisionNote && run) setFollowedRunId(run.run_id);
+  }, [decisionNote, run]);
+  const waitingRunId =
+    followedRunId && run && run.run_id === followedRunId && !isTerminal(run.status) ? followedRunId : null;
   useEffect(() => {
     if (!waitingRunId || !client.getRun) return;
     const getRun = client.getRun;
@@ -844,7 +858,7 @@ function Console({
       if (stopped || busyRef.current || !current || current.run_id !== waitingRunId) return;
       try {
         const view = await getRun(waitingRunId);
-        if (stopped || view.status === current.status) return;
+        if (stopped || (view.status === current.status && view.trajectory.length === current.trajectory.length)) return;
         for (const e of eventsFromView(view, current)) apply(e);
         await refreshAudit(view.run_id);
         if (isTerminal(view.status)) await runVerify();

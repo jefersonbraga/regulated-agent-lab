@@ -514,6 +514,9 @@
   }
   .stage {
     position: relative;
+    /* The nodes' z-index stays inside the stage: scrolled under the sticky header, they must not
+       paint over it. */
+    isolation: isolate;
     container-type: inline-size;
     block-size: clamp(240px, 20vw, 290px);
     border: 1px solid var(--color-border);
@@ -1018,6 +1021,9 @@
     align-items: center;
     gap: var(--spacing-2);
     min-inline-size: 0;
+  }
+  .gate-waiting li > :first-child {
+    flex-shrink: 0;
   }
   .gate-waiting-line {
     overflow: hidden;

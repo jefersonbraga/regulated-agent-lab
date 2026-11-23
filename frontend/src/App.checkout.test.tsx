@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import App, { parseCheckoutReturn } from "./App";
@@ -129,6 +129,11 @@ describe("hosted Checkout in the console", () => {
     expect(within(booked).getByTestId("receipt-link")).toBeInTheDocument();
     // The return query is consumed, so a reload does not repeat it.
     expect(window.location.search).toBe("");
+    // The page keeps working after "Booked" (audit reload, chain verify, focus on the outcome):
+    // let those updates land inside act, not after the test.
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
   });
 
   it("after a cancelled checkout offers to pay again or cancel", async () => {
@@ -218,8 +223,16 @@ describe("sign-in", () => {
 
   it("follows a quote another person must decide, and shows their decision when it lands", async () => {
     const requester: Me = { ...me, require_separate_approver: true };
+    // After the decision the run passes through "running" (booking, payment) before it ends:
+    // the page must keep following it until it is terminal, not stop at the first change.
+    const running: RunView = { ...cleanAwaiting, status: "running", interrupt: null };
     let decided = false;
-    const getRun = vi.fn(async () => (decided ? cleanCompleted : cleanAwaiting));
+    let reads = 0;
+    const getRun = vi.fn(async () => {
+      if (!decided) return cleanAwaiting;
+      reads += 1;
+      return reads <= 2 ? running : cleanCompleted;
+    });
     const client = sessionClient({ getMe: vi.fn().mockResolvedValue(requester), getRun });
     render(<App client={client} paceMs={0} decisionPollMs={20} />);
     await screen.findByTestId("nav-user");
@@ -230,6 +243,7 @@ describe("sign-in", () => {
     await waitFor(() => expect(getRun).toHaveBeenCalled());
     expect(screen.getByRole("region", { name: "Approval required" })).toBeInTheDocument();
     decided = true;
+    await waitFor(() => expect(screen.getByTestId("run-status")).toHaveTextContent("running"));
     await waitFor(() => expect(screen.getByTestId("run-status")).toHaveTextContent("completed"));
     expect(getRun).toHaveBeenCalledWith(cleanCompleted.run_id);
     expect(screen.queryByRole("region", { name: "Approval required" })).not.toBeInTheDocument();
